@@ -3,6 +3,7 @@ let token = localStorage.getItem('token');
 let user = null;
 let ws = null;
 let isRunning = false;
+let currentSessionId = 0;
 
 try { user = JSON.parse(localStorage.getItem('user') || 'null'); } catch(e) {}
 
@@ -49,7 +50,7 @@ function init() {
     document.getElementById('userEmail').textContent = user.email;
     document.getElementById('userAvatar').textContent = (user.name || user.email)[0].toUpperCase();
   }
-  loadChatHistory();
+  loadSessions();
   loadFiles();
   loadSkills();
 }
@@ -94,10 +95,10 @@ document.getElementById('chatInput').addEventListener('input', function() {
 });
 
 async function sendMessage() {
-  const input = document.getElementById('chatInput');
-  const text = input.value.trim();
-  if (!text || isRunning) return;
-
+  if (isRunning) return;
+  var input = document.getElementById('chatInput');
+  var text = input.value.trim();
+  if (!text) return;
   input.value = '';
   input.style.height = 'auto';
   isRunning = true;
@@ -105,21 +106,21 @@ async function sendMessage() {
 
   appendMessage('user', text);
 
-  const agentMsg = appendMessage('agent', '');
-  const bubble = agentMsg.querySelector('.msg-bubble');
-  const typingEl = createTypingIndicator();
+  var agentMsg = appendMessage('agent', '');
+  var bubble = agentMsg.querySelector('.msg-bubble');
+  var typingEl = createTypingIndicator();
   bubble.appendChild(typingEl);
 
-  let fullContent = '';
+  var fullContent = '';
 
   try {
-    const r = await fetch(API + '/api/agent/stream', {
+    var r = await fetch(API + '/api/agent/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token
       },
-      body: JSON.stringify({ prompt: text })
+      body: JSON.stringify({ prompt: text, session_id: currentSessionId })
     });
 
     if (r.status === 401) { handleLogout(); return; }
@@ -176,15 +177,16 @@ async function sendMessage() {
 
 async function loadChatHistory() {
   try {
-    const r = await fetch(API + '/api/chat/history', {
+    var url = API + '/api/chat/history';
+    if (currentSessionId > 0) url += '?session_id=' + currentSessionId;
+    const r = await fetch(url, {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     if (r.ok) {
       const d = await r.json();
       const messages = d.messages || [];
       const container = document.getElementById('chatMessages');
-      const empty = container.querySelector('.empty-state');
-      if (empty) empty.remove();
+      container.innerHTML = '';
       messages.forEach(m => {
         appendMessage(m.role, m.content);
       });
@@ -365,7 +367,7 @@ async function sendMessageText(text) {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token
       },
-      body: JSON.stringify({ prompt: text })
+      body: JSON.stringify({ prompt: text, session_id: currentSessionId })
     });
 
     if (r.status === 401) { handleLogout(); return; }
@@ -615,6 +617,90 @@ function escHtml(s) {
 
 function escAttr(s) {
   return s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+async function loadSessions() {
+  try {
+    var r = await fetch(API + '/api/sessions', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (r.ok) {
+      var d = await r.json();
+      var sessions = d.sessions || [];
+      var select = document.getElementById('sessionSelect');
+
+      if (sessions.length === 0) {
+        var cr = await fetch(API + '/api/sessions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          body: JSON.stringify({ name: 'default' })
+        });
+        if (cr.ok) {
+          var cd = await cr.json();
+          currentSessionId = cd.session.id;
+        }
+        loadSessions();
+        return;
+      }
+
+      select.innerHTML = sessions.map(function(s) {
+        return '<option value="' + s.id + '"' + (s.id === currentSessionId ? ' selected' : '') + '>' + escHtml(s.name) + '</option>';
+      }).join('');
+
+      if (currentSessionId === 0) {
+        currentSessionId = sessions[0].id;
+        select.value = currentSessionId;
+      }
+
+      loadChatHistory();
+    }
+  } catch(e) {}
+}
+
+function switchSession(id) {
+  currentSessionId = parseInt(id, 10);
+  loadChatHistory();
+}
+
+async function createNewSession() {
+  var name = prompt('Session name:', 'New Session');
+  if (!name) return;
+  try {
+    var r = await fetch(API + '/api/sessions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({ name: name })
+    });
+    if (r.ok) {
+      var d = await r.json();
+      currentSessionId = d.session.id;
+      loadSessions();
+    }
+  } catch(e) {}
+}
+
+async function deleteCurrentSession() {
+  if (!currentSessionId) return;
+  if (!confirm('Delete this session and its chat history?')) return;
+  try {
+    var r = await fetch(API + '/api/sessions?session_id=' + currentSessionId, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (r.ok) {
+      currentSessionId = 0;
+      loadSessions();
+    } else {
+      var d = await r.json();
+      alert(d.error || 'Failed to delete session');
+    }
+  } catch(e) {}
 }
 
 init();

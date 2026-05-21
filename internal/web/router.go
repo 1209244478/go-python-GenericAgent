@@ -41,6 +41,10 @@ func SetupRouter(h *Handler) *gin.Engine {
 
 			protected.GET("/templates", h.ListTemplates)
 			protected.GET("/skills", h.ListSkills)
+
+			protected.GET("/sessions", h.ListSessions)
+			protected.POST("/sessions", h.CreateSession)
+			protected.DELETE("/sessions", h.DeleteSession)
 		}
 	}
 

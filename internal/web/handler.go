@@ -200,7 +200,8 @@ func (h *Handler) RunAgent(c *gin.Context) {
 	userID := c.GetInt64("user_id")
 
 	var req struct {
-		Prompt string `json:"prompt" binding:"required"`
+		Prompt    string `json:"prompt" binding:"required"`
+		SessionID int64  `json:"session_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "prompt required"})
@@ -274,8 +275,13 @@ func (h *Handler) RunAgent(c *gin.Context) {
 		finalContent = "Task completed."
 	}
 
-	h.saveChatMessage(userID, "user", req.Prompt)
-	h.saveChatMessage(userID, "agent", finalContent)
+	if req.SessionID > 0 {
+		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt)
+		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent)
+	} else {
+		h.saveChatMessage(userID, "user", req.Prompt)
+		h.saveChatMessage(userID, "agent", finalContent)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"response":   finalContent,
@@ -289,7 +295,8 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 	userID := c.GetInt64("user_id")
 
 	var req struct {
-		Prompt string `json:"prompt" binding:"required"`
+		Prompt    string `json:"prompt" binding:"required"`
+		SessionID int64  `json:"session_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "prompt required"})
@@ -374,8 +381,13 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 		finalContent = "Task completed."
 	}
 
-	h.saveChatMessage(userID, "user", req.Prompt)
-	h.saveChatMessage(userID, "agent", finalContent)
+	if req.SessionID > 0 {
+		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt)
+		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent)
+	} else {
+		h.saveChatMessage(userID, "user", req.Prompt)
+		h.saveChatMessage(userID, "agent", finalContent)
+	}
 }
 
 func (h *Handler) WebSocketAgent(c *gin.Context) {
@@ -872,8 +884,26 @@ func (h *Handler) chatHistoryPath(userID int64) string {
 	return filepath.Join(userDir, ".chat_history.json")
 }
 
+func (h *Handler) chatHistoryPathSession(userID int64, sessionID int64) string {
+	userDir := h.wsMgr.UserDir(userID)
+	return filepath.Join(userDir, fmt.Sprintf(".chat_history_%d.json", sessionID))
+}
+
 func (h *Handler) loadChatHistory(userID int64) []ChatMessage {
 	path := h.chatHistoryPath(userID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var messages []ChatMessage
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return nil
+	}
+	return messages
+}
+
+func (h *Handler) loadChatHistorySession(userID int64, sessionID int64) []ChatMessage {
+	path := h.chatHistoryPathSession(userID, sessionID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -903,8 +933,38 @@ func (h *Handler) saveChatMessage(userID int64, role string, content string) {
 	os.WriteFile(h.chatHistoryPath(userID), data, 0644)
 }
 
+func (h *Handler) saveChatMessageSession(userID int64, sessionID int64, role string, content string) {
+	messages := h.loadChatHistorySession(userID, sessionID)
+	messages = append(messages, ChatMessage{
+		Role:      role,
+		Content:   content,
+		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+	})
+	const maxMessages = 200
+	if len(messages) > maxMessages {
+		messages = messages[len(messages)-maxMessages:]
+	}
+	data, err := json.Marshal(messages)
+	if err != nil {
+		return
+	}
+	os.WriteFile(h.chatHistoryPathSession(userID, sessionID), data, 0644)
+}
+
 func (h *Handler) GetChatHistory(c *gin.Context) {
 	userID := c.GetInt64("user_id")
+	sessionIDStr := c.Query("session_id")
+	if sessionIDStr != "" {
+		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+		if err == nil {
+			messages := h.loadChatHistorySession(userID, sessionID)
+			if messages == nil {
+				messages = []ChatMessage{}
+			}
+			c.JSON(http.StatusOK, gin.H{"messages": messages})
+			return
+		}
+	}
 	messages := h.loadChatHistory(userID)
 	if messages == nil {
 		messages = []ChatMessage{}
@@ -914,7 +974,79 @@ func (h *Handler) GetChatHistory(c *gin.Context) {
 
 func (h *Handler) ClearChatHistory(c *gin.Context) {
 	userID := c.GetInt64("user_id")
-	path := h.chatHistoryPath(userID)
-	os.Remove(path)
+	sessionIDStr := c.Query("session_id")
+	if sessionIDStr != "" {
+		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+		if err == nil {
+			os.Remove(h.chatHistoryPathSession(userID, sessionID))
+			c.JSON(http.StatusOK, gin.H{"message": "cleared"})
+			return
+		}
+	}
+	os.Remove(h.chatHistoryPath(userID))
 	c.JSON(http.StatusOK, gin.H{"message": "cleared"})
+}
+
+func (h *Handler) ListSessions(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+	sessions, err := h.users.ListSessions(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
+		return
+	}
+	if sessions == nil {
+		sessions = []auth.Session{}
+	}
+	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+}
+
+func (h *Handler) CreateSession(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	sess, err := h.users.CreateSession(userID, req.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"session": sess})
+}
+
+func (h *Handler) DeleteSession(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+	sessionIDStr := c.Query("session_id")
+	if sessionIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id required"})
+		return
+	}
+	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
+		return
+	}
+
+	sess, err := h.users.GetSession(userID, sessionID)
+	if err != nil || sess == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		return
+	}
+
+	sessions, _ := h.users.ListSessions(userID)
+	if len(sessions) <= 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot delete the last session"})
+		return
+	}
+
+	os.Remove(h.chatHistoryPathSession(userID, sessionID))
+
+	if err := h.users.DeleteSession(userID, sessionID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }

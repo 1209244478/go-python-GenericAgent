@@ -40,6 +40,8 @@ server_linux
 ga-server-linux
 ga
 ga.exe
+deploy.py
+deploy_verify.py
 ga.exe~
 ga.cmd
 *.exe~
