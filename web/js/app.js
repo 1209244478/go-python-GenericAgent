@@ -505,7 +505,7 @@ function previewFile(path, name) {
   } else if (pdfExts.indexOf(ext) !== -1) {
     body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:80vh;border:none;border-radius:8px"></iframe>';
   } else if (htmlExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:80vh;border:none;border-radius:8px"></iframe>';
+    fetchHtmlPreview(previewUrl, body);
   } else if (textExts.indexOf(ext) !== -1 || ext === '') {
     fetchTextPreview(previewUrl, name);
   } else {
@@ -532,6 +532,25 @@ async function fetchTextPreview(url, name) {
     }
     var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     body.innerHTML = '<pre class="preview-code">' + escaped + (truncated ? '\n\n... (showing first ' + maxLines + ' of ' + lines.length + ' lines)' : '') + '</pre>';
+  } catch(e) {
+    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+async function fetchHtmlPreview(url, body) {
+  try {
+    var r = await fetch(url);
+    if (!r.ok) {
+      body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load file</div>';
+      return;
+    }
+    var html = await r.text();
+    var iframe = document.createElement('iframe');
+    iframe.sandbox = 'allow-scripts';
+    iframe.style.cssText = 'width:100%;height:80vh;border:none;border-radius:8px';
+    iframe.srcdoc = html;
+    body.innerHTML = '';
+    body.appendChild(iframe);
   } catch(e) {
     body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
   }

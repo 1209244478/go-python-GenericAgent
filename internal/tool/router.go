@@ -92,6 +92,39 @@ var blockedCommands = []string{
 	"yum ",
 	"dnf ",
 	"brew ",
+	"base64 -d",
+	"base64 --decode",
+	"python -c",
+	"python3 -c",
+	"perl -e",
+	"ruby -e",
+	"node -e",
+	"php -r",
+	"env ",
+	"printenv",
+	"export ",
+	"source ",
+	"bash -i",
+	"sh -i",
+	"/bin/bash",
+	"/bin/sh",
+	"dev/tcp",
+	"dev/udp",
+	"telnet ",
+	"nc ",
+	"socat",
+	"openssl ",
+	"jq ",
+	"awk ",
+	"sed -i",
+	"find /",
+	"xargs",
+	"tee ",
+	"cat /etc",
+	"head /etc",
+	"tail /etc",
+	"less /etc",
+	"more /etc",
 }
 
 var blockedCodePatterns = []string{
@@ -138,6 +171,43 @@ var blockedCodePatterns = []string{
 	"eval(",
 	"open(",
 	"open (",
+	"__builtins__",
+	"getattr(",
+	"globals()",
+	"locals()",
+	"vars()",
+	"dir()",
+	"type(",
+	"base64.b64decode",
+	"base64.b64encode",
+	"base64.decode",
+	"os.environ",
+	"os.getenv",
+	"os.exec",
+	"os.spawn",
+	"os.kill",
+	"sys.exit",
+	"atexit",
+	"webbrowser",
+	"http.server",
+	"socketserver",
+	"xmlrpc",
+	"telnetlib",
+	"smtplib",
+	"ftplib",
+	"urllib.request",
+	"requests.get",
+	"requests.post",
+	"requests.put",
+	"requests.delete",
+	"requests.patch",
+	"hmac",
+	"hashlib",
+	"secrets",
+	"tempfile",
+	"shlex",
+	"codecs.decode",
+	"codecs.encode",
 }
 
 var blockedDbPatterns = []string{
@@ -227,7 +297,7 @@ func (r *Router) Dispatch(toolName string, args map[string]any, response *llm.Re
 	case "update_working_checkpoint":
 		return r.doUpdateWorkingCheckpoint(args)
 	case "skill_run":
-		return r.doSkillRun(args)
+		return r.doSkillRun(args, response)
 	default:
 		return &agent.StepOutcome{
 			Data:       nil,
@@ -514,8 +584,16 @@ func (r *Router) doUpdateWorkingCheckpoint(args map[string]any) *agent.StepOutco
 	}
 }
 
-func (r *Router) doSkillRun(args map[string]any) *agent.StepOutcome {
+func (r *Router) doSkillRun(args map[string]any, response *llm.Response) *agent.StepOutcome {
 	skillName := strArg(args, "skill", "")
+
+	if strings.Contains(skillName, "/") || strings.Contains(skillName, "\\") || strings.Contains(skillName, "..") || strings.Contains(skillName, " ") {
+		return &agent.StepOutcome{
+			Data:       map[string]any{"status": "error", "msg": "Invalid skill name"},
+			NextPrompt: "\n",
+		}
+	}
+
 	skillArgs, _ := json.Marshal(args)
 
 	skillPath := filepath.Join(r.SkillDir, skillName+".py")
@@ -748,38 +826,71 @@ func (r *Router) isCodeBlocked(code string, codeType string) (bool, string) {
 	lowerCode := strings.ToLower(code)
 
 	if codeType == "python" || codeType == "py" {
+		normalized := normalizePythonCode(lowerCode)
 		for _, pattern := range blockedDbPatterns {
-			if strings.Contains(lowerCode, strings.ToLower(pattern)) {
+			if strings.Contains(normalized, strings.ToLower(pattern)) {
 				return true, "database access is not allowed"
 			}
 		}
 		for _, pattern := range blockedCodePatterns {
-			if strings.Contains(lowerCode, strings.ToLower(pattern)) {
+			if strings.Contains(normalized, strings.ToLower(pattern)) {
 				return true, "system-level code execution is not allowed (" + pattern + ")"
 			}
 		}
 		for _, blocked := range blockedReadPaths {
-			if strings.Contains(lowerCode, strings.ToLower(blocked)) {
+			if strings.Contains(normalized, strings.ToLower(blocked)) {
 				return true, "access to restricted path is not allowed (" + blocked + ")"
 			}
 		}
 	}
 
 	if codeType == "powershell" || codeType == "bash" || codeType == "sh" || codeType == "shell" {
+		normalized := normalizeShellCode(lowerCode)
 		for _, cmd := range blockedCommands {
-			if strings.Contains(lowerCode, strings.ToLower(cmd)) {
+			if strings.Contains(normalized, strings.ToLower(cmd)) {
 				return true, "dangerous system command is not allowed (" + cmd + ")"
 			}
 		}
 
 		for _, blocked := range blockedReadPaths {
-			if strings.Contains(lowerCode, strings.ToLower(blocked)) {
+			if strings.Contains(normalized, strings.ToLower(blocked)) {
 				return true, "access to restricted path is not allowed (" + blocked + ")"
 			}
 		}
 	}
 
 	return false, ""
+}
+
+func normalizePythonCode(code string) string {
+	normalized := strings.ReplaceAll(code, `\n`, "")
+	normalized = strings.ReplaceAll(normalized, `\t`, "")
+	normalized = strings.ReplaceAll(normalized, `\r`, "")
+	normalized = strings.ReplaceAll(normalized, `' + '`, "")
+	normalized = strings.ReplaceAll(normalized, `" + "`, "")
+	normalized = strings.ReplaceAll(normalized, `'+ '`, "")
+	normalized = strings.ReplaceAll(normalized, `"+ "`, "")
+	normalized = strings.ReplaceAll(normalized, `'+'`, "")
+	normalized = strings.ReplaceAll(normalized, `"+"`, "")
+	normalized = strings.ReplaceAll(normalized, `  `, " ")
+	var result strings.Builder
+	for _, ch := range normalized {
+		if ch != '\\' {
+			result.WriteRune(ch)
+		}
+	}
+	return result.String()
+}
+
+func normalizeShellCode(code string) string {
+	normalized := strings.ReplaceAll(code, `\`, "")
+	normalized = strings.ReplaceAll(normalized, `'`, "")
+	normalized = strings.ReplaceAll(normalized, `"`, "")
+	normalized = strings.ReplaceAll(normalized, `$()`, "")
+	normalized = strings.ReplaceAll(normalized, `$()`, "")
+	normalized = regexp.MustCompile(`\$\{[^}]*\}`).ReplaceAllString(normalized, "")
+	normalized = strings.ReplaceAll(normalized, `  `, " ")
+	return normalized
 }
 
 func isPathBlockedRead(path string) bool {

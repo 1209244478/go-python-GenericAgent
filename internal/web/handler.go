@@ -509,6 +509,9 @@ func (h *Handler) ReadFile(c *gin.Context) {
 
 func (h *Handler) UploadFile(c *gin.Context) {
 	userID := c.GetInt64("user_id")
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 50*1024*1024)
+
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file required"})
@@ -631,7 +634,7 @@ func (h *Handler) PreviewFile(c *gin.Context) {
 
 	switch ext {
 	case ".html", ".htm":
-		contentType = "text/html; charset=utf-8"
+		contentType = "text/plain; charset=utf-8"
 	case ".css":
 		contentType = "text/css; charset=utf-8"
 	case ".js":
