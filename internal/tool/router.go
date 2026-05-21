@@ -609,7 +609,15 @@ func (r *Router) doSkillRun(args map[string]any, response *llm.Response) *agent.
 	if err != nil {
 		return &agent.StepOutcome{
 			Data:       map[string]any{"status": "error", "msg": err.Error()},
-			NextPrompt: "\n",
+			NextPrompt: "Skill execution failed. Please check the error and try again.\n",
+		}
+	}
+
+	if status, _ := result["status"].(string); status == "error" {
+		errMsg, _ := result["msg"].(string)
+		return &agent.StepOutcome{
+			Data:       result,
+			NextPrompt: fmt.Sprintf("Skill returned error: %s\nPlease fix the issue and try again.\n", errMsg),
 		}
 	}
 
@@ -704,7 +712,16 @@ func (r *Router) runPythonSkill(scriptPath, argsJSON string) (map[string]any, er
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+
+	if stdout.Len() > 0 {
+		var result map[string]any
+		if jsonErr := json.Unmarshal(stdout.Bytes(), &result); jsonErr == nil {
+			return result, nil
+		}
+	}
+
+	if err != nil {
 		return nil, fmt.Errorf("%s: %s", err.Error(), stderr.String())
 	}
 
