@@ -68,6 +68,30 @@ var blockedCommands = []string{
 	"ln -s",
 	"symlink",
 	"ln -sf",
+	"sqlite3 ",
+	"mysql ",
+	"mysqldump",
+	"psql ",
+	"pg_dump",
+	"mongo ",
+	"mongodump",
+	"redis-cli",
+	"mongosh",
+	"sqlplus",
+	"sqlcmd",
+	"bt default",
+	"bt ",
+	"/etc/init.d/",
+	"kill -9",
+	"killall",
+	"pkill",
+	"pip install",
+	"pip3 install",
+	"npm install",
+	"apt ",
+	"yum ",
+	"dnf ",
+	"brew ",
 }
 
 var blockedCodePatterns = []string{
@@ -734,12 +758,23 @@ func (r *Router) isCodeBlocked(code string, codeType string) (bool, string) {
 				return true, "system-level code execution is not allowed (" + pattern + ")"
 			}
 		}
+		for _, blocked := range blockedReadPaths {
+			if strings.Contains(lowerCode, strings.ToLower(blocked)) {
+				return true, "access to restricted path is not allowed (" + blocked + ")"
+			}
+		}
 	}
 
 	if codeType == "powershell" || codeType == "bash" || codeType == "sh" || codeType == "shell" {
 		for _, cmd := range blockedCommands {
 			if strings.Contains(lowerCode, strings.ToLower(cmd)) {
 				return true, "dangerous system command is not allowed (" + cmd + ")"
+			}
+		}
+
+		for _, blocked := range blockedReadPaths {
+			if strings.Contains(lowerCode, strings.ToLower(blocked)) {
+				return true, "access to restricted path is not allowed (" + blocked + ")"
 			}
 		}
 	}
