@@ -660,6 +660,13 @@ async function loadSessions() {
           + '</div>';
       }).join('');
 
+      var toggle = document.getElementById('sessionToggle');
+      if (sessionListVisible) {
+        toggle.classList.add('open');
+      } else {
+        toggle.classList.remove('open');
+      }
+
       loadChatHistory();
     }
   } catch(e) {}
@@ -667,11 +674,48 @@ async function loadSessions() {
 
 function switchSession(id) {
   currentSessionId = parseInt(id, 10);
+  var agentNav = document.querySelector('.nav-item[data-view="chat"]');
+  switchView('chat', agentNav);
   loadSessions();
 }
 
-async function createNewSession() {
-  var name = prompt('Session name:', 'New Session');
+var sessionListVisible = true;
+
+function toggleSessionList() {
+  sessionListVisible = !sessionListVisible;
+  var section = document.getElementById('sessionSection');
+  var toggle = document.getElementById('sessionToggle');
+  if (sessionListVisible) {
+    section.style.display = '';
+    toggle.classList.add('open');
+  } else {
+    section.style.display = 'none';
+    toggle.classList.remove('open');
+  }
+}
+
+function showSessionInput() {
+  document.getElementById('sessionNewBtn').style.display = 'none';
+  var wrap = document.getElementById('sessionNewInput');
+  wrap.style.display = 'flex';
+  var input = document.getElementById('sessionNameInput');
+  input.value = '';
+  input.focus();
+}
+
+function cancelNewSession() {
+  document.getElementById('sessionNewBtn').style.display = '';
+  document.getElementById('sessionNewInput').style.display = 'none';
+}
+
+function handleSessionInputKey(e) {
+  if (e.key === 'Enter') { confirmNewSession(); e.preventDefault(); }
+  if (e.key === 'Escape') { cancelNewSession(); e.preventDefault(); }
+}
+
+async function confirmNewSession() {
+  var input = document.getElementById('sessionNameInput');
+  var name = input.value.trim();
   if (!name) return;
   try {
     var r = await fetch(API + '/api/sessions', {
@@ -688,6 +732,7 @@ async function createNewSession() {
       loadSessions();
     }
   } catch(e) {}
+  cancelNewSession();
 }
 
 async function deleteSession(id) {

@@ -26,15 +26,31 @@
     </div>
 
     <nav class="sidebar-nav">
-      <a href="#" class="nav-item active" data-view="chat" onclick="switchView('chat',this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-        Agent
-      </a>
-      <div class="session-list" id="sessionList"></div>
-      <button class="session-new-btn" onclick="createNewSession()" title="New Session">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        New Session
-      </button>
+      <div class="nav-item-row">
+        <a href="#" class="nav-item active" data-view="chat" onclick="switchView('chat',this)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          Agent
+        </a>
+        <button class="session-toggle" id="sessionToggle" onclick="toggleSessionList()" title="Toggle sessions">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
+      <div class="session-section" id="sessionSection">
+        <div class="session-list" id="sessionList"></div>
+        <div class="session-new-btn" id="sessionNewBtn" onclick="showSessionInput()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>New Session</span>
+        </div>
+        <div class="session-new-input" id="sessionNewInput" style="display:none">
+          <input type="text" id="sessionNameInput" placeholder="Session name" onkeydown="handleSessionInputKey(event)" />
+          <button class="session-input-ok" onclick="confirmNewSession()" title="Confirm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+          <button class="session-input-cancel" onclick="cancelNewSession()" title="Cancel">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
       <a href="#" class="nav-item" data-view="files" onclick="switchView('files',this)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
         Files
