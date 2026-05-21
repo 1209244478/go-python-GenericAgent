@@ -27,15 +27,16 @@ type Router struct {
 }
 
 var blockedCommands = []string{
-	"rm -rf /",
-	"rm -rf /*",
+	"rm -rf",
+	"rm -r",
+	"rmdir",
 	"mkfs.",
 	"dd if=",
 	":(){ :|:& };:",
-	"chmod -R 777 /",
-	"chown -R",
-	"wget http",
-	"curl http",
+	"chmod",
+	"chown",
+	"wget",
+	"curl",
 	"nc -l",
 	"ncat",
 	"/etc/passwd",
@@ -44,16 +45,36 @@ var blockedCommands = []string{
 	"reboot",
 	"init 0",
 	"init 6",
-	"systemctl stop",
-	"systemctl disable",
-	"service stop",
-	"iptables -F",
-	"ufw disable",
+	"systemctl",
+	"service",
+	"iptables",
+	"ufw",
+	"crontab",
+	"at ",
+	"nohup",
+	"screen ",
+	"tmux",
+	"ssh ",
+	"scp ",
+	"rsync",
+	"mount",
+	"umount",
+	"fdisk",
+	"parted",
+	"mkfs",
+	"fsck",
+	"swapoff",
+	"swapon",
+	"ln -s",
+	"symlink",
+	"ln -sf",
 }
 
 var blockedCodePatterns = []string{
 	"subprocess.call",
 	"subprocess.Popen",
+	"subprocess.run",
+	"subprocess.check_output",
 	"os.system",
 	"os.popen",
 	"exec(",
@@ -66,9 +87,33 @@ var blockedCodePatterns = []string{
 	"ansible",
 	"pexpect",
 	"shutil.rmtree",
+	"shutil.copy",
+	"shutil.move",
 	"os.remove",
 	"os.unlink",
 	"os.rmdir",
+	"os.rename",
+	"os.symlink",
+	"os.link",
+	"os.chmod",
+	"os.chown",
+	"os.mkdir",
+	"os.makedirs",
+	"os.walk",
+	"os.scandir",
+	"os.listdir",
+	"glob.glob",
+	"pathlib.Path",
+	"ctypes",
+	"signal.signal",
+	"multiprocessing",
+	"threading",
+	"pickle.loads",
+	"marshal.loads",
+	"compile(",
+	"eval(",
+	"open(",
+	"open (",
 }
 
 var blockedDbPatterns = []string{
@@ -91,15 +136,11 @@ var blockedDbPatterns = []string{
 }
 
 var blockedReadPaths = []string{
-	"/etc/passwd",
-	"/etc/shadow",
-	"/etc/ssh/",
-	"/root/.ssh/",
+	"/etc/",
+	"/root/",
 	"/home/",
-	"/var/lib/mysql/",
+	"/var/",
 	"/www/server/",
-	"/www/server/data/",
-	"/www/server/mysql/",
 	"/opt/genericagent/server.json",
 	"/opt/genericagent/mykey.json",
 	"/opt/genericagent/.env",
@@ -108,16 +149,23 @@ var blockedReadPaths = []string{
 var blockedWritePaths = []string{
 	"/etc/",
 	"/root/",
+	"/home/",
 	"/var/",
 	"/www/server/",
 	"/opt/genericagent/server.json",
 	"/opt/genericagent/mykey.json",
 	"/opt/genericagent/.env",
 	"/boot/",
-	"/usr/lib/",
+	"/usr/",
 	"/lib/",
 	"/sbin/",
 	"/bin/",
+	"/tmp/",
+	"/dev/",
+	"/proc/",
+	"/sys/",
+	"/run/",
+	"/snap/",
 }
 
 func NewRouter(cwd string) *Router {
@@ -244,6 +292,13 @@ func (r *Router) doFileRead(args map[string]any) *agent.StepOutcome {
 		}
 	}
 
+	if isOtherUserDir(path, r.Cwd) {
+		return &agent.StepOutcome{
+			Data:       "Error: Access denied - cannot access other users' workspace",
+			NextPrompt: "\n",
+		}
+	}
+
 	if !r.isPathAllowed(path) {
 		return &agent.StepOutcome{
 			Data:       fmt.Sprintf("Error: Access denied - path outside allowed directories: %s", path),
@@ -311,6 +366,13 @@ func (r *Router) doFileWrite(args map[string]any) *agent.StepOutcome {
 		}
 	}
 
+	if isOtherUserDir(path, r.Cwd) {
+		return &agent.StepOutcome{
+			Data:       map[string]any{"status": "error", "msg": "Access denied - cannot access other users' workspace"},
+			NextPrompt: "\n",
+		}
+	}
+
 	if !r.isWriteAllowed(path) {
 		return &agent.StepOutcome{
 			Data:       map[string]any{"status": "error", "msg": "Access denied - cannot write outside your workspace"},
@@ -351,6 +413,13 @@ func (r *Router) doFilePatch(args map[string]any) *agent.StepOutcome {
 	if isPathBlockedWrite(path) {
 		return &agent.StepOutcome{
 			Data:       map[string]any{"status": "error", "msg": "Access denied - path is restricted by security policy"},
+			NextPrompt: "\n",
+		}
+	}
+
+	if isOtherUserDir(path, r.Cwd) {
+		return &agent.StepOutcome{
+			Data:       map[string]any{"status": "error", "msg": "Access denied - cannot access other users' workspace"},
 			NextPrompt: "\n",
 		}
 	}
@@ -610,6 +679,11 @@ func (r *Router) isPathAllowed(path string) bool {
 	}
 	abs = filepath.Clean(abs)
 
+	realPath, err := resolveSymlinks(abs)
+	if err == nil {
+		abs = realPath
+	}
+
 	if strings.HasPrefix(abs, filepath.Clean(r.Cwd)) {
 		return true
 	}
@@ -633,6 +707,11 @@ func (r *Router) isWriteAllowed(path string) bool {
 		return false
 	}
 	abs = filepath.Clean(abs)
+
+	realPath, err := resolveSymlinks(abs)
+	if err == nil {
+		abs = realPath
+	}
 
 	if strings.HasPrefix(abs, filepath.Clean(r.Cwd)) {
 		return true
@@ -674,6 +753,10 @@ func isPathBlockedRead(path string) bool {
 		return true
 	}
 	abs = filepath.Clean(abs)
+	realPath, err := resolveSymlinks(abs)
+	if err == nil {
+		abs = realPath
+	}
 	for _, blocked := range blockedReadPaths {
 		if strings.HasPrefix(abs, blocked) {
 			return true
@@ -688,10 +771,49 @@ func isPathBlockedWrite(path string) bool {
 		return true
 	}
 	abs = filepath.Clean(abs)
+	realPath, err := resolveSymlinks(abs)
+	if err == nil {
+		abs = realPath
+	}
 	for _, blocked := range blockedWritePaths {
 		if strings.HasPrefix(abs, blocked) {
 			return true
 		}
 	}
 	return false
+}
+
+func isOtherUserDir(path string, currentUserDir string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return true
+	}
+	abs = filepath.Clean(abs)
+	realPath, err := resolveSymlinks(abs)
+	if err == nil {
+		abs = realPath
+	}
+	cleanUserDir := filepath.Clean(currentUserDir)
+	parentDir := filepath.Dir(cleanUserDir)
+	if !strings.HasPrefix(abs, parentDir+string(filepath.Separator)) {
+		return false
+	}
+	rel, err := filepath.Rel(parentDir, abs)
+	if err != nil {
+		return true
+	}
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if len(parts) == 0 {
+		return true
+	}
+	otherUserDir := filepath.Join(parentDir, parts[0])
+	return otherUserDir != cleanUserDir
+}
+
+func resolveSymlinks(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path, err
+	}
+	return filepath.Clean(resolved), nil
 }
