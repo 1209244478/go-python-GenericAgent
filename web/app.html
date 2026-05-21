@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GenericAgent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div id="app">
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <span>GenericAgent</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-view="chat" onclick="switchView('chat',this)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        Agent
+      </a>
+      <a href="#" class="nav-item" data-view="files" onclick="switchView('files',this)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+        Files
+      </a>
+      <a href="#" class="nav-item" data-view="skills" onclick="switchView('skills',this)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        Skills
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-info" onclick="toggleUserMenu()">
+        <div class="avatar" id="userAvatar"></div>
+        <div class="user-detail">
+          <span class="user-name" id="userName"></span>
+          <span class="user-email" id="userEmail"></span>
+        </div>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div class="user-menu" id="userMenu">
+        <button onclick="handleLogout()">Sign Out</button>
+      </div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="view-chat" class="view active">
+      <div class="chat-header">
+        <div class="chat-title">
+          <h2>Agent</h2>
+          <span class="status-badge" id="agentStatus">Ready</span>
+        </div>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="empty-state">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <p>Describe your task and the agent will execute it autonomously.</p>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <div class="input-wrapper">
+          <textarea id="chatInput" placeholder="Describe your task..." rows="1" onkeydown="handleInputKey(event)"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-files" class="view">
+      <div class="view-header">
+        <h2>My Files</h2>
+        <button class="btn-sm" onclick="document.getElementById('uploadInput').click()">Upload</button>
+        <input type="file" id="uploadInput" style="display:none" onchange="handleUpload(this)">
+      </div>
+      <div class="file-list" id="fileList">
+        <div class="empty-state"><p>No files yet. Upload or let the agent create them.</p></div>
+      </div>
+    </div>
+
+    <div id="view-skills" class="view">
+      <div class="view-header">
+        <h2>Skills</h2>
+        <span class="badge-readonly">Read Only</span>
+      </div>
+      <div class="skill-list" id="skillList">
+        <div class="empty-state"><p>Loading skills...</p></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GenericAgent - Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090b;--surface:#18181b;--surface-2:#27272a;--border:#3f3f46;
+  --text:#fafafa;--text-2:#a1a1aa;--text-3:#71717a;
+  --accent:#10b981;--accent-hover:#34d399;--accent-dim:rgba(16,185,129,.12);
+  --radius:10px;--radius-lg:16px;
+}
+html,body{height:100%;font-family:'Geist',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+body{display:flex;align-items:center;justify-content:center;min-height:100dvh;padding:1.5rem}
+
+.auth-card{
+  width:100%;max-width:420px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:2.5rem;position:relative;overflow:hidden;
+}
+.auth-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(16,185,129,.3),transparent);
+}
+
+.brand{margin-bottom:2rem}
+.brand h1{font-size:1.5rem;font-weight:600;letter-spacing:-.02em;color:var(--text)}
+.brand p{font-size:.875rem;color:var(--text-3);margin-top:.375rem;line-height:1.5}
+
+.tabs{display:flex;gap:2px;background:var(--bg);border-radius:var(--radius);padding:3px;margin-bottom:1.75rem}
+.tab{
+  flex:1;padding:.5rem;text-align:center;font-size:.8125rem;font-weight:500;
+  color:var(--text-3);background:transparent;border:none;border-radius:7px;cursor:pointer;
+  transition:all .2s ease;
+}
+.tab.active{background:var(--surface-2);color:var(--text)}
+.tab:hover:not(.active){color:var(--text-2)}
+
+.field{margin-bottom:1.25rem}
+.field label{display:block;font-size:.8125rem;font-weight:500;color:var(--text-2);margin-bottom:.375rem}
+.field input{
+  width:100%;padding:.625rem .875rem;font-size:.875rem;font-family:inherit;
+  background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text);outline:none;transition:border-color .2s ease;
+}
+.field input:focus{border-color:var(--accent)}
+.field input::placeholder{color:var(--text-3)}
+
+.code-row{display:flex;gap:.5rem}
+.code-row input{flex:1}
+.code-row button{
+  padding:.625rem 1rem;font-size:.8125rem;font-weight:500;font-family:inherit;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text-2);cursor:pointer;white-space:nowrap;transition:all .2s ease;
+}
+.code-row button:hover{border-color:var(--accent);color:var(--accent)}
+.code-row button:disabled{opacity:.5;cursor:not-allowed}
+
+.submit{
+  width:100%;padding:.75rem;font-size:.875rem;font-weight:600;font-family:inherit;
+  background:var(--accent);color:#fff;border:none;border-radius:var(--radius);
+  cursor:pointer;transition:all .2s ease;margin-top:.5rem;
+}
+.submit:hover{background:var(--accent-hover);transform:translateY(-1px)}
+.submit:active{transform:translateY(0)}
+.submit:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+.error-msg{
+  font-size:.8125rem;color:#f87171;margin-top:.5rem;
+  padding:.5rem .75rem;background:rgba(248,113,113,.08);border-radius:var(--radius);
+  display:none;
+}
+.error-msg.show{display:block}
+
+.register-fields{display:none}
+.register-fields.show{display:block}
+
+.footer{margin-top:1.5rem;text-align:center;font-size:.75rem;color:var(--text-3)}
+</style>
+</head>
+<body>
+
+<div class="auth-card">
+  <div class="brand">
+    <h1>GenericAgent</h1>
+    <p>AI-powered autonomous agent platform</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('login')">Sign In</button>
+    <button class="tab" onclick="switchTab('register')">Register</button>
+  </div>
+
+  <div id="error" class="error-msg"></div>
+
+  <form id="loginForm" onsubmit="handleLogin(event)">
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="name@company.com" required>
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="loginPwd" placeholder="Enter password" required>
+    </div>
+    <button type="submit" class="submit">Sign In</button>
+  </form>
+
+  <form id="registerForm" class="register-fields" onsubmit="handleRegister(event)">
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="regEmail" placeholder="name@company.com" required>
+    </div>
+    <div class="field">
+      <label>Verification Code</label>
+      <div class="code-row">
+        <input type="text" id="regCode" placeholder="6-digit code" maxlength="6" required>
+        <button type="button" id="sendCodeBtn" onclick="handleSendCode()">Send Code</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="regPwd" placeholder="At least 6 characters" required minlength="6">
+    </div>
+    <div class="field">
+      <label>Name (optional)</label>
+      <input type="text" id="regName" placeholder="Display name">
+    </div>
+    <button type="submit" class="submit">Create Account</button>
+  </form>
+
+  <div class="footer">Internal use only. All activities are logged.</div>
+</div>
+
+<script>
+const API='';
+let codeTimer=0;
+
+function switchTab(tab){
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    t.classList.toggle('active',i===(tab==='login'?0:1));
+  });
+  document.getElementById('loginForm').style.display=tab==='login'?'block':'none';
+  document.getElementById('registerForm').classList.toggle('show',tab==='register');
+  hideError();
+}
+
+function showError(msg){
+  const el=document.getElementById('error');
+  el.textContent=msg;el.classList.add('show');
+}
+function hideError(){
+  document.getElementById('error').classList.remove('show');
+}
+
+async function handleLogin(e){
+  e.preventDefault();hideError();
+  const email=document.getElementById('loginEmail').value;
+  const pwd=document.getElementById('loginPwd').value;
+  try{
+    const r=await fetch(API+'/api/auth/login',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,password:pwd})
+    });
+    const d=await r.json();
+    if(!r.ok){showError(d.error||'Login failed');return}
+    localStorage.setItem('token',d.token);
+    localStorage.setItem('user',JSON.stringify(d.user));
+    window.location.href='/';
+  }catch(err){showError('Network error')}
+}
+
+async function handleSendCode(){
+  const email=document.getElementById('regEmail').value;
+  if(!email){showError('Enter email first');return}
+  const btn=document.getElementById('sendCodeBtn');
+  btn.disabled=true;
+  try{
+    const r=await fetch(API+'/api/auth/send-code',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email})
+    });
+    const d=await r.json();
+    if(!r.ok){showError(d.error||'Send failed');btn.disabled=false;return}
+    codeTimer=60;
+    const tick=()=>{
+      if(codeTimer<=0){btn.textContent='Send Code';btn.disabled=false;return}
+      btn.textContent=codeTimer+'s';codeTimer--;setTimeout(tick,1000);
+    };
+    tick();
+  }catch(err){showError('Network error');btn.disabled=false}
+}
+
+async function handleRegister(e){
+  e.preventDefault();hideError();
+  const email=document.getElementById('regEmail').value;
+  const code=document.getElementById('regCode').value;
+  const pwd=document.getElementById('regPwd').value;
+  const name=document.getElementById('regName').value;
+  try{
+    const r=await fetch(API+'/api/auth/register',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,code,password:pwd,name})
+    });
+    const d=await r.json();
+    if(!r.ok){showError(d.error||'Registration failed');return}
+    localStorage.setItem('token',d.token);
+    localStorage.setItem('user',JSON.stringify(d.user));
+    window.location.href='/';
+  }catch(err){showError('Network error')}
+}
+
+const token=localStorage.getItem('token');
+if(token){window.location.href='/'}
+</script>
+</body>
+</html>
