@@ -482,10 +482,11 @@ async function handleUpload(input) {
 function previewFile(path, name) {
   var ext = (name || '').split('.').pop().toLowerCase();
   var imageExts = ['png','jpg','jpeg','gif','webp','bmp','ico','svg'];
-  var textExts = ['txt','md','json','yaml','yml','toml','ini','cfg','conf','env','csv','log','py','go','js','ts','tsx','jsx','vue','svelte','html','htm','css','scss','less','sh','bash','zsh','java','c','cpp','h','hpp','rs','rb','php','sql','xml'];
+  var textExts = ['txt','md','json','yaml','yml','toml','ini','cfg','conf','env','csv','log','py','go','js','ts','tsx','jsx','vue','svelte','css','scss','less','sh','bash','zsh','java','c','cpp','h','hpp','rs','rb','php','sql','xml'];
   var videoExts = ['mp4'];
   var audioExts = ['mp3','wav'];
   var pdfExts = ['pdf'];
+  var htmlExts = ['html','htm'];
 
   var previewUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(path) + '&token=' + token;
 
@@ -503,6 +504,8 @@ function previewFile(path, name) {
     body.innerHTML = '<div style="padding:2rem;text-align:center"><div style="font-size:3rem;margin-bottom:1rem">&#9835;</div><audio src="' + previewUrl + '" controls style="width:100%"></audio></div>';
   } else if (pdfExts.indexOf(ext) !== -1) {
     body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>';
+  } else if (htmlExts.indexOf(ext) !== -1) {
+    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px" sandbox></iframe>';
   } else if (textExts.indexOf(ext) !== -1 || ext === '') {
     fetchTextPreview(previewUrl, name);
   } else {

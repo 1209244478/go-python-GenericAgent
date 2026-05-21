@@ -148,3 +148,5 @@ reflect/*
 **/__pycache__/
 
 .claude/
+
+历史记录.md
