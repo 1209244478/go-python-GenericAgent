@@ -627,7 +627,7 @@ async function loadSessions() {
     if (r.ok) {
       var d = await r.json();
       var sessions = d.sessions || [];
-      var select = document.getElementById('sessionSelect');
+      var container = document.getElementById('sessionList');
 
       if (sessions.length === 0) {
         var cr = await fetch(API + '/api/sessions', {
@@ -646,14 +646,19 @@ async function loadSessions() {
         return;
       }
 
-      select.innerHTML = sessions.map(function(s) {
-        return '<option value="' + s.id + '"' + (s.id === currentSessionId ? ' selected' : '') + '>' + escHtml(s.name) + '</option>';
-      }).join('');
-
       if (currentSessionId === 0) {
         currentSessionId = sessions[0].id;
-        select.value = currentSessionId;
       }
+
+      container.innerHTML = sessions.map(function(s) {
+        var isActive = s.id === currentSessionId;
+        return '<div class="session-item' + (isActive ? ' active' : '') + '" data-id="' + s.id + '" onclick="switchSession(' + s.id + ')">'
+          + '<span class="session-name">' + escHtml(s.name) + '</span>'
+          + '<button class="session-del" onclick="event.stopPropagation();deleteSession(' + s.id + ')" title="Delete">'
+          + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+          + '</button>'
+          + '</div>';
+      }).join('');
 
       loadChatHistory();
     }
@@ -662,7 +667,7 @@ async function loadSessions() {
 
 function switchSession(id) {
   currentSessionId = parseInt(id, 10);
-  loadChatHistory();
+  loadSessions();
 }
 
 async function createNewSession() {
@@ -685,16 +690,15 @@ async function createNewSession() {
   } catch(e) {}
 }
 
-async function deleteCurrentSession() {
-  if (!currentSessionId) return;
+async function deleteSession(id) {
   if (!confirm('Delete this session and its chat history?')) return;
   try {
-    var r = await fetch(API + '/api/sessions?session_id=' + currentSessionId, {
+    var r = await fetch(API + '/api/sessions?session_id=' + id, {
       method: 'DELETE',
       headers: { 'Authorization': 'Bearer ' + token }
     });
     if (r.ok) {
-      currentSessionId = 0;
+      if (id === currentSessionId) currentSessionId = 0;
       loadSessions();
     } else {
       var d = await r.json();

@@ -123,24 +123,39 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   font-size:.6875rem;font-weight:500;color:var(--accent);
   padding:.125rem .5rem;background:var(--accent-dim);border-radius:999px;
 }
-.session-bar{
+.session-list{
+  display:flex;flex-direction:column;gap:1px;
+  padding:0 .5rem;margin-top:2px;
+  max-height:240px;overflow-y:auto;
+}
+.session-item{
   display:flex;align-items:center;gap:.375rem;
+  padding:.375rem .5rem;font-size:.8125rem;font-weight:500;
+  color:var(--text-3);border-radius:6px;cursor:pointer;
+  transition:all .15s ease;position:relative;
 }
-.session-bar select{
-  font-family:inherit;font-size:.8125rem;font-weight:500;
-  padding:.25rem .5rem;border-radius:var(--radius);
-  background:var(--surface-2);border:1px solid var(--border);
-  color:var(--text);cursor:pointer;outline:none;
-  max-width:160px;
+.session-item:hover{color:var(--text-2);background:var(--surface-2)}
+.session-item.active{color:var(--text);background:var(--surface-2)}
+.session-item.active .session-name{color:var(--accent)}
+.session-name{
+  flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.session-bar select:focus{border-color:var(--accent)}
-.btn-icon{
-  width:28px;height:28px;border-radius:6px;border:none;
-  background:var(--surface-2);color:var(--text-3);cursor:pointer;
-  display:flex;align-items:center;justify-content:center;transition:all .15s ease;
+.session-del{
+  width:20px;height:20px;border-radius:4px;border:none;
+  background:transparent;color:var(--text-4);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;transition:all .15s ease;flex-shrink:0;
 }
-.btn-icon:hover{background:var(--accent-dim);color:var(--accent)}
-.btn-icon-danger:hover{background:var(--danger-dim);color:var(--danger)}
+.session-item:hover .session-del{opacity:1}
+.session-del:hover{background:var(--danger-dim);color:var(--danger)}
+.session-new-btn{
+  display:flex;align-items:center;gap:.375rem;
+  padding:.375rem .75rem;margin:2px .5rem 0;
+  font-size:.75rem;font-weight:500;font-family:inherit;
+  color:var(--text-4);background:none;border:1px dashed var(--border);
+  border-radius:6px;cursor:pointer;transition:all .15s ease;
+}
+.session-new-btn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-dim)}
 .status-badge.running{color:#fbbf24;background:rgba(251,191,36,.1)}
 .status-badge.error{color:var(--danger);background:var(--danger-dim)}
 
@@ -424,9 +439,7 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   }
   #sidebar.open{transform:translateX(0)}
   #mobileMenuBtn{display:flex}
-  .chat-header{padding:.75rem 1rem;flex-wrap:wrap;gap:.5rem}
-  .session-bar{width:100%}
-  .session-bar select{flex:1;max-width:none}
+  .chat-header{padding:.75rem 1rem}
   .chat-messages{padding:1rem}
   .chat-input-area{padding:.75rem 1rem 1rem}
   .msg{max-width:100%}
