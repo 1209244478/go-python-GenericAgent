@@ -390,13 +390,6 @@ func (c *Client) parseSSEStream(body io.ReadCloser, ch chan<- StreamChunk) error
 		}
 	}
 
-	for i := 0; i < len(tcBuf); i++ {
-		if buf, ok := tcBuf[i]; ok {
-			input := parseJSONArgs(buf.args)
-			ch <- StreamChunk{Text: fmt.Sprintf("\n🛠️ Tool: `%s` 📥 args:\n```\n%s\n```\n", buf.name, prettyJSON(input))}
-		}
-	}
-
 	if len(tcBuf) > 0 {
 		var toolCalls []ToolCall
 		for i := 0; i < len(tcBuf); i++ {

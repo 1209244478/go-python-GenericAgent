@@ -106,6 +106,9 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 				}
 				if chunk.Text != "" {
 					fullContent += chunk.Text
+					if len(chunk.ToolCalls) == 0 {
+						ch <- DisplayItem{Turn: turn, Content: chunk.Text, Source: "final"}
+					}
 				}
 				if len(chunk.ToolCalls) > 0 {
 					collectedToolCalls = append(collectedToolCalls, chunk.ToolCalls...)
@@ -122,8 +125,10 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 
 			var toolCalls []toolCallInfo
 			if len(response.ToolCalls) == 0 {
+				if fullContent == "" {
+					ch <- DisplayItem{Turn: turn, Content: "", Source: "final"}
+				}
 				exitReason = map[string]any{"result": "CURRENT_TASK_DONE", "data": fullContent}
-				ch <- DisplayItem{Turn: turn, Content: fullContent, Source: "final"}
 				break
 			} else {
 				for _, tc := range response.ToolCalls {
