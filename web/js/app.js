@@ -497,15 +497,15 @@ function previewFile(path, name) {
   title.textContent = name || path;
 
   if (imageExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<img src="' + previewUrl + '" style="max-width:100%;max-height:70vh;border-radius:8px" alt="' + escHtml(name) + '">';
+    body.innerHTML = '<img src="' + previewUrl + '" style="max-width:100%;max-height:80vh;border-radius:8px;display:block" alt="' + escHtml(name) + '">';
   } else if (videoExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<video src="' + previewUrl + '" controls style="max-width:100%;max-height:70vh;border-radius:8px"></video>';
+    body.innerHTML = '<video src="' + previewUrl + '" controls style="max-width:100%;max-height:80vh;border-radius:8px;display:block"></video>';
   } else if (audioExts.indexOf(ext) !== -1) {
     body.innerHTML = '<div style="padding:2rem;text-align:center"><div style="font-size:3rem;margin-bottom:1rem">&#9835;</div><audio src="' + previewUrl + '" controls style="width:100%"></audio></div>';
   } else if (pdfExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>';
+    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:80vh;border:none;border-radius:8px"></iframe>';
   } else if (htmlExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>';
+    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:80vh;border:none;border-radius:8px"></iframe>';
   } else if (textExts.indexOf(ext) !== -1 || ext === '') {
     fetchTextPreview(previewUrl, name);
   } else {
