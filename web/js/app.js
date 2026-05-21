@@ -448,6 +448,7 @@ function renderFiles(files) {
         <div class="file-meta">${size} &middot; ${f.mod_time}</div>
       </div>
       <div class="file-actions">
+        <button onclick="previewFile('${escAttr(f.path)}','${escAttr(f.name)}')">Preview</button>
         <button onclick="downloadFile('${escAttr(f.path)}')">Download</button>
         <button class="del" onclick="deleteFile('${escAttr(f.path)}')">Delete</button>
       </div>
@@ -469,6 +470,65 @@ async function handleUpload(input) {
     if (r.ok) loadFiles();
   } catch(e) {}
   input.value = '';
+}
+
+function previewFile(path, name) {
+  var ext = (name || '').split('.').pop().toLowerCase();
+  var imageExts = ['png','jpg','jpeg','gif','webp','bmp','ico','svg'];
+  var textExts = ['txt','md','json','yaml','yml','toml','ini','cfg','conf','env','csv','log','py','go','js','ts','tsx','jsx','vue','svelte','html','htm','css','scss','less','sh','bash','zsh','java','c','cpp','h','hpp','rs','rb','php','sql','xml'];
+  var videoExts = ['mp4'];
+  var audioExts = ['mp3','wav'];
+  var pdfExts = ['pdf'];
+
+  var previewUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(path) + '&token=' + token;
+
+  var modal = document.getElementById('previewModal');
+  var title = document.getElementById('previewTitle');
+  var body = document.getElementById('previewBody');
+
+  title.textContent = name || path;
+
+  if (imageExts.indexOf(ext) !== -1) {
+    body.innerHTML = '<img src="' + previewUrl + '" style="max-width:100%;max-height:70vh;border-radius:8px" alt="' + escHtml(name) + '">';
+  } else if (videoExts.indexOf(ext) !== -1) {
+    body.innerHTML = '<video src="' + previewUrl + '" controls style="max-width:100%;max-height:70vh;border-radius:8px"></video>';
+  } else if (audioExts.indexOf(ext) !== -1) {
+    body.innerHTML = '<div style="padding:2rem;text-align:center"><div style="font-size:3rem;margin-bottom:1rem">&#9835;</div><audio src="' + previewUrl + '" controls style="width:100%"></audio></div>';
+  } else if (pdfExts.indexOf(ext) !== -1) {
+    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>';
+  } else if (textExts.indexOf(ext) !== -1 || ext === '') {
+    fetchTextPreview(previewUrl, name);
+  } else {
+    body.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-3)"><p>Preview not available for this file type</p><p style="font-size:.8125rem">.' + escHtml(ext) + ' files can be downloaded instead</p></div>';
+  }
+
+  modal.classList.add('show');
+}
+
+async function fetchTextPreview(url, name) {
+  var body = document.getElementById('previewBody');
+  try {
+    var r = await fetch(url);
+    if (!r.ok) {
+      body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load file</div>';
+      return;
+    }
+    var text = await r.text();
+    var lines = text.split('\n');
+    var maxLines = 500;
+    var truncated = lines.length > maxLines;
+    if (truncated) {
+      text = lines.slice(0, maxLines).join('\n');
+    }
+    var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    body.innerHTML = '<pre class="preview-code">' + escaped + (truncated ? '\n\n... (showing first ' + maxLines + ' of ' + lines.length + ' lines)' : '') + '</pre>';
+  } catch(e) {
+    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function closePreview() {
+  document.getElementById('previewModal').classList.remove('show');
 }
 
 function downloadFile(path) {

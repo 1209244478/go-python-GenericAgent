@@ -24,6 +24,10 @@ func AuthMiddleware(jwtMgr *auth.JWTManager) gin.HandlerFunc {
 		}
 
 		if tokenStr == "" {
+			tokenStr = c.Query("token")
+		}
+
+		if tokenStr == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			c.Abort()
 			return

@@ -571,6 +571,88 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
+func (h *Handler) PreviewFile(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+	path := c.Query("path")
+	if path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path required"})
+		return
+	}
+
+	var fullPath string
+	var err error
+
+	if strings.HasPrefix(path, "skills/") {
+		skillRelPath := strings.TrimPrefix(path, "skills/")
+		fullPath, err = h.wsMgr.ResolveSkillPath(skillRelPath)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		fullPath, err = h.wsMgr.ResolvePath(userID, path)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	stat, err := os.Stat(fullPath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		return
+	}
+
+	if stat.Size() > 10*1024*1024 {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file too large for preview (max 10MB)"})
+		return
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "read failed"})
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(fullPath))
+	contentType := "application/octet-stream"
+
+	switch ext {
+	case ".html", ".htm":
+		contentType = "text/html; charset=utf-8"
+	case ".css":
+		contentType = "text/css; charset=utf-8"
+	case ".js":
+		contentType = "text/javascript; charset=utf-8"
+	case ".json":
+		contentType = "application/json; charset=utf-8"
+	case ".txt", ".log", ".csv", ".md", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".sh", ".bash", ".zsh", ".py", ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".rs", ".rb", ".php", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".sql", ".xml", ".svg":
+		contentType = "text/plain; charset=utf-8"
+	case ".png":
+		contentType = "image/png"
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".gif":
+		contentType = "image/gif"
+	case ".webp":
+		contentType = "image/webp"
+	case ".ico":
+		contentType = "image/x-icon"
+	case ".bmp":
+		contentType = "image/bmp"
+	case ".pdf":
+		contentType = "application/pdf"
+	case ".mp4":
+		contentType = "video/mp4"
+	case ".mp3":
+		contentType = "audio/mpeg"
+	case ".wav":
+		contentType = "audio/wav"
+	}
+
+	c.Data(http.StatusOK, contentType, data)
+}
+
 func (h *Handler) ListSkills(c *gin.Context) {
 	type SkillInfo struct {
 		Name        string                 `json:"name"`
