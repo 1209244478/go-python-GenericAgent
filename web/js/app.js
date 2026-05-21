@@ -58,8 +58,13 @@ function init() {
 function switchView(view, el) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.nav-item-row').forEach(n => n.classList.remove('active'));
   document.getElementById('view-' + view).classList.add('active');
-  if (el) el.classList.add('active');
+  if (el) {
+    el.classList.add('active');
+    var row = el.closest('.nav-item-row');
+    if (row) row.classList.add('active');
+  }
   closeMobileSidebar();
 }
 
