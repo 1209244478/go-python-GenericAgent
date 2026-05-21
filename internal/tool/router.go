@@ -26,6 +26,100 @@ type Router struct {
 	AllowedDirs  []string
 }
 
+var blockedCommands = []string{
+	"rm -rf /",
+	"rm -rf /*",
+	"mkfs.",
+	"dd if=",
+	":(){ :|:& };:",
+	"chmod -R 777 /",
+	"chown -R",
+	"wget http",
+	"curl http",
+	"nc -l",
+	"ncat",
+	"/etc/passwd",
+	"/etc/shadow",
+	"shutdown",
+	"reboot",
+	"init 0",
+	"init 6",
+	"systemctl stop",
+	"systemctl disable",
+	"service stop",
+	"iptables -F",
+	"ufw disable",
+}
+
+var blockedCodePatterns = []string{
+	"subprocess.call",
+	"subprocess.Popen",
+	"os.system",
+	"os.popen",
+	"exec(",
+	"__import__",
+	"importlib",
+	"socket.socket",
+	"socket.connect",
+	"paramiko",
+	"fabric",
+	"ansible",
+	"pexpect",
+	"shutil.rmtree",
+	"os.remove",
+	"os.unlink",
+	"os.rmdir",
+}
+
+var blockedDbPatterns = []string{
+	"mysql.connector",
+	"pymysql",
+	"mysql.connector",
+	"psycopg2",
+	"sqlite3.connect",
+	"mongodb",
+	"pymongo",
+	"sqlalchemy",
+	"DROP DATABASE",
+	"DROP TABLE",
+	"DROP SCHEMA",
+	"GRANT ALL",
+	"CREATE USER",
+	"ALTER USER",
+	"mysqldump",
+	"pg_dump",
+}
+
+var blockedReadPaths = []string{
+	"/etc/passwd",
+	"/etc/shadow",
+	"/etc/ssh/",
+	"/root/.ssh/",
+	"/home/",
+	"/var/lib/mysql/",
+	"/www/server/",
+	"/www/server/data/",
+	"/www/server/mysql/",
+	"/opt/genericagent/server.json",
+	"/opt/genericagent/mykey.json",
+	"/opt/genericagent/.env",
+}
+
+var blockedWritePaths = []string{
+	"/etc/",
+	"/root/",
+	"/var/",
+	"/www/server/",
+	"/opt/genericagent/server.json",
+	"/opt/genericagent/mykey.json",
+	"/opt/genericagent/.env",
+	"/boot/",
+	"/usr/lib/",
+	"/lib/",
+	"/sbin/",
+	"/bin/",
+}
+
 func NewRouter(cwd string) *Router {
 	pyPath := "python"
 	if p, err := exec.LookPath("python3"); err == nil {
@@ -86,7 +180,17 @@ func (r *Router) doCodeRun(args map[string]any, response *llm.Response) *agent.S
 		}
 	}
 
+	if blocked, reason := r.isCodeBlocked(code, codeType); blocked {
+		return &agent.StepOutcome{
+			Data:       map[string]any{"status": "error", "msg": "Security policy: " + reason},
+			NextPrompt: "\n",
+		}
+	}
+
 	timeout := intArg(args, "timeout", 60)
+	if timeout > 300 {
+		timeout = 300
+	}
 	cwd := strArg(args, "cwd", r.Cwd)
 	if !filepath.IsAbs(cwd) {
 		cwd = filepath.Join(r.Cwd, cwd)
@@ -131,6 +235,13 @@ func (r *Router) doFileRead(args map[string]any) *agent.StepOutcome {
 
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(r.Cwd, path)
+	}
+
+	if isPathBlockedRead(path) {
+		return &agent.StepOutcome{
+			Data:       "Error: Access denied - path is restricted by security policy",
+			NextPrompt: "\n",
+		}
 	}
 
 	if !r.isPathAllowed(path) {
@@ -193,6 +304,13 @@ func (r *Router) doFileWrite(args map[string]any) *agent.StepOutcome {
 		path = filepath.Join(r.Cwd, path)
 	}
 
+	if isPathBlockedWrite(path) {
+		return &agent.StepOutcome{
+			Data:       map[string]any{"status": "error", "msg": "Access denied - path is restricted by security policy"},
+			NextPrompt: "\n",
+		}
+	}
+
 	if !r.isWriteAllowed(path) {
 		return &agent.StepOutcome{
 			Data:       map[string]any{"status": "error", "msg": "Access denied - cannot write outside your workspace"},
@@ -228,6 +346,13 @@ func (r *Router) doFilePatch(args map[string]any) *agent.StepOutcome {
 
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(r.Cwd, path)
+	}
+
+	if isPathBlockedWrite(path) {
+		return &agent.StepOutcome{
+			Data:       map[string]any{"status": "error", "msg": "Access denied - path is restricted by security policy"},
+			NextPrompt: "\n",
+		}
 	}
 
 	if !r.isWriteAllowed(path) {
@@ -513,5 +638,60 @@ func (r *Router) isWriteAllowed(path string) bool {
 		return true
 	}
 
+	return false
+}
+
+func (r *Router) isCodeBlocked(code string, codeType string) (bool, string) {
+	lowerCode := strings.ToLower(code)
+
+	if codeType == "python" || codeType == "py" {
+		for _, pattern := range blockedDbPatterns {
+			if strings.Contains(lowerCode, strings.ToLower(pattern)) {
+				return true, "database access is not allowed"
+			}
+		}
+		for _, pattern := range blockedCodePatterns {
+			if strings.Contains(lowerCode, strings.ToLower(pattern)) {
+				return true, "system-level code execution is not allowed (" + pattern + ")"
+			}
+		}
+	}
+
+	if codeType == "powershell" || codeType == "bash" || codeType == "sh" || codeType == "shell" {
+		for _, cmd := range blockedCommands {
+			if strings.Contains(lowerCode, strings.ToLower(cmd)) {
+				return true, "dangerous system command is not allowed (" + cmd + ")"
+			}
+		}
+	}
+
+	return false, ""
+}
+
+func isPathBlockedRead(path string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return true
+	}
+	abs = filepath.Clean(abs)
+	for _, blocked := range blockedReadPaths {
+		if strings.HasPrefix(abs, blocked) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPathBlockedWrite(path string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return true
+	}
+	abs = filepath.Clean(abs)
+	for _, blocked := range blockedWritePaths {
+		if strings.HasPrefix(abs, blocked) {
+			return true
+		}
+	}
 	return false
 }
