@@ -235,6 +235,15 @@ function renderMarkdown(text) {
   let html = text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+  html = html.replace(/```interactive\n([\s\S]*?)```/g, function(m, jsonStr) {
+    try {
+      var cfg = JSON.parse(jsonStr.trim());
+      return renderInteractiveCard(cfg);
+    } catch(e) {
+      return '<pre><code>' + jsonStr.trim() + '</code></pre>';
+    }
+  });
+
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code) {
     return '<pre><code class="lang-' + lang + '">' + code.trim() + '</code></pre>';
   });
@@ -285,8 +294,131 @@ function renderMarkdown(text) {
   html = html.replace(/<p>\s*(<hr>)/g, '$1');
   html = html.replace(/<p>\s*(<blockquote>)/g, '$1');
   html = html.replace(/(<\/blockquote>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*(<div class="interactive-card")/g, '$1');
+  html = html.replace(/(<\/div>)\s*<\/p>/g, '$1');
 
   return html;
+}
+
+var _interactiveCardId = 0;
+
+function renderInteractiveCard(cfg) {
+  var cardId = 'icard_' + (++_interactiveCardId) + '_' + (cfg.id || 'unknown');
+  if (cfg.type === 'input') {
+    return '<div class="interactive-card" id="' + cardId + '">' +
+      '<div class="icard-question">' + escHtml(cfg.question || '') + '</div>' +
+      '<div class="icard-input-row">' +
+        '<input type="text" class="icard-input" id="' + cardId + '_input" placeholder="' + escHtml(cfg.placeholder || '') + '">' +
+        '<button class="icard-btn" onclick="submitInteractiveInput(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\')">Submit</button>' +
+      '</div>' +
+    '</div>';
+  }
+  if (cfg.type === 'choice') {
+    var opts = (cfg.options || []).map(function(opt, i) {
+      return '<button class="icard-choice-btn" onclick="submitInteractiveChoice(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\',\'' + escAttr(opt) + '\')">' + escHtml(opt) + '</button>';
+    }).join('');
+    return '<div class="interactive-card" id="' + cardId + '">' +
+      '<div class="icard-question">' + escHtml(cfg.question || '') + '</div>' +
+      '<div class="icard-choices">' + opts + '</div>' +
+    '</div>';
+  }
+  return '<pre><code>' + escHtml(JSON.stringify(cfg)) + '</code></pre>';
+}
+
+function submitInteractiveInput(cardId, fieldId) {
+  var input = document.getElementById(cardId + '_input');
+  if (!input || !input.value.trim()) return;
+  var value = input.value.trim();
+  var card = document.getElementById(cardId);
+  if (card) {
+    card.innerHTML = '<div class="icard-answered"><span class="icard-label">' + escHtml(fieldId) + '</span> ' + escHtml(value) + '</div>';
+  }
+  sendMessageText('[用户输入] ' + fieldId + ': ' + value);
+}
+
+function submitInteractiveChoice(cardId, fieldId, value) {
+  var card = document.getElementById(cardId);
+  if (card) {
+    card.innerHTML = '<div class="icard-answered"><span class="icard-label">' + escHtml(fieldId) + '</span> ' + escHtml(value) + '</div>';
+  }
+  sendMessageText('[用户选择] ' + fieldId + ': ' + value);
+}
+
+async function sendMessageText(text) {
+  if (isRunning) return;
+  isRunning = true;
+  updateStatus('running');
+
+  appendMessage('user', text);
+
+  var agentMsg = appendMessage('agent', '');
+  var bubble = agentMsg.querySelector('.msg-bubble');
+  var typingEl = createTypingIndicator();
+  bubble.appendChild(typingEl);
+
+  var fullContent = '';
+
+  try {
+    var r = await fetch(API + '/api/agent/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({ prompt: text })
+    });
+
+    if (r.status === 401) { handleLogout(); return; }
+
+    var reader = r.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+
+    while (true) {
+      var result = await reader.read();
+      if (result.done) break;
+
+      buffer += decoder.decode(result.value, { stream: true });
+      var lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line.startsWith('data: ')) continue;
+        var jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+
+        var d;
+        try { d = JSON.parse(jsonStr); } catch(e) { continue; }
+
+        if (d.source === 'final' && d.content) {
+          if (typingEl.parentNode) typingEl.remove();
+          fullContent += d.content;
+          bubble.innerHTML = renderMarkdown(fullContent);
+          var container = document.getElementById('chatMessages');
+          container.scrollTop = container.scrollHeight;
+        } else if (d.source === 'tool' && d.content) {
+          if (typingEl.parentNode) typingEl.remove();
+        } else if (d.source === 'error' && d.content) {
+          if (typingEl.parentNode) typingEl.remove();
+          fullContent += d.content;
+          bubble.innerHTML = renderMarkdown(fullContent);
+        } else if (d.done) {
+          if (typingEl.parentNode) typingEl.remove();
+          if (!fullContent) {
+            bubble.innerHTML = renderMarkdown('Task completed.');
+          }
+        }
+      }
+    }
+  } catch (err) {
+    typingEl.remove();
+    bubble.textContent = 'Network error: ' + err.message;
+  }
+
+  isRunning = false;
+  updateStatus('ready');
+  loadFiles();
 }
 
 async function loadFiles() {

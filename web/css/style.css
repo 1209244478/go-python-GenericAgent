@@ -291,6 +291,53 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
 .typing-indicator span:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
 
+.interactive-card{
+  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:1rem;margin:.5rem 0;
+}
+.icard-question{
+  font-size:.875rem;font-weight:500;color:var(--text);margin-bottom:.75rem;line-height:1.5;
+}
+.icard-input-row{
+  display:flex;gap:.5rem;
+}
+.icard-input{
+  flex:1;padding:.5rem .75rem;font-size:.875rem;font-family:inherit;
+  background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text);outline:none;transition:border-color .2s ease;
+}
+.icard-input:focus{border-color:var(--accent)}
+.icard-input::placeholder{color:var(--text-3)}
+.icard-btn{
+  padding:.5rem 1rem;font-size:.8125rem;font-weight:600;font-family:inherit;
+  background:var(--accent);color:#fff;border:none;border-radius:var(--radius);
+  cursor:pointer;transition:all .15s ease;white-space:nowrap;
+}
+.icard-btn:hover{background:var(--accent-hover)}
+.icard-btn:active{transform:scale(.97)}
+.icard-choices{
+  display:flex;flex-wrap:wrap;gap:.5rem;
+}
+.icard-choice-btn{
+  padding:.5rem 1rem;font-size:.8125rem;font-weight:500;font-family:inherit;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text-2);cursor:pointer;transition:all .15s ease;
+}
+.icard-choice-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.icard-choice-btn:active{transform:scale(.97)}
+.icard-answered{
+  font-size:.875rem;color:var(--text-2);padding:.25rem 0;
+}
+.icard-label{
+  font-weight:600;color:var(--accent);font-size:.75rem;text-transform:uppercase;letter-spacing:.03em;
+  margin-right:.375rem;
+}
+
+@media(max-width:768px){
+  .icard-input-row{flex-direction:column}
+  .icard-btn{width:100%;text-align:center}
+}
+
 ::-webkit-scrollbar{width:6px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}

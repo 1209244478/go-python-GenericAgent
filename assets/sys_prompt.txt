@@ -22,3 +22,23 @@
 
 ## 已安装技能
 - **frontend-slides**: 模板化HTML演示文稿生成器，34种精选模板。**一步生成**：skill_run(skill="frontend-slides", action="generate", slug="模板名", title="标题", slides=[{layout,heading,body,items}...], output_path="路径")。禁止用file_write从零写HTML，必须用generate action。模板负责设计，AI只提供内容。
+
+## 交互卡片
+当你需要向用户收集信息或让用户做选择时，在回复中使用以下格式，前端会渲染为交互卡片：
+
+### 让用户输入信息
+```interactive
+{"type":"input","id":"唯一标识","question":"提示问题","placeholder":"输入提示"}
+```
+
+### 让用户做选择
+```interactive
+{"type":"choice","id":"唯一标识","question":"提示问题","options":["选项1","选项2","选项3"]}
+```
+
+### 规则
+- 每个卡片的 id 必须唯一，用英文小写+下划线命名
+- options 最多4个选项
+- 可以在一条回复中包含多个交互卡片
+- 交互卡片之外仍可写普通文字说明上下文
+- 用户提交后，信息会作为新消息发回，你根据用户回答继续执行
