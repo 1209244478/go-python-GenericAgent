@@ -26,6 +26,7 @@ func SetupRouter(h *Handler) *gin.Engine {
 			protected.GET("/user/profile", h.GetProfile)
 
 			protected.POST("/agent/run", h.RunAgent)
+			protected.POST("/agent/stream", h.StreamAgent)
 			protected.GET("/agent/ws", h.WebSocketAgent)
 
 			protected.GET("/chat/history", h.GetChatHistory)

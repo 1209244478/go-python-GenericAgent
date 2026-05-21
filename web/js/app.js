@@ -70,11 +70,14 @@ async function sendMessage() {
   appendMessage('user', text);
 
   const agentMsg = appendMessage('agent', '');
+  const bubble = agentMsg.querySelector('.msg-bubble');
   const typingEl = createTypingIndicator();
-  agentMsg.querySelector('.msg-bubble').appendChild(typingEl);
+  bubble.appendChild(typingEl);
+
+  let fullContent = '';
 
   try {
-    const r = await fetch(API + '/api/agent/run', {
+    const r = await fetch(API + '/api/agent/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -85,17 +88,49 @@ async function sendMessage() {
 
     if (r.status === 401) { handleLogout(); return; }
 
-    const d = await r.json();
-    typingEl.remove();
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-    if (d.response) {
-      agentMsg.querySelector('.msg-bubble').innerHTML = renderMarkdown(d.response);
-    } else if (d.error) {
-      agentMsg.querySelector('.msg-bubble').textContent = 'Error: ' + d.error;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+
+        let d;
+        try { d = JSON.parse(jsonStr); } catch(e) { continue; }
+
+        if (d.source === 'final' && d.content) {
+          if (typingEl.parentNode) typingEl.remove();
+          fullContent += d.content;
+          bubble.innerHTML = renderMarkdown(fullContent);
+          const container = document.getElementById('chatMessages');
+          container.scrollTop = container.scrollHeight;
+        } else if (d.source === 'tool' && d.content) {
+          if (typingEl.parentNode) typingEl.remove();
+        } else if (d.source === 'error' && d.content) {
+          if (typingEl.parentNode) typingEl.remove();
+          fullContent += d.content;
+          bubble.innerHTML = renderMarkdown(fullContent);
+        } else if (d.done) {
+          if (typingEl.parentNode) typingEl.remove();
+          if (!fullContent) {
+            bubble.innerHTML = renderMarkdown('Task completed.');
+          }
+        }
+      }
     }
   } catch (err) {
     typingEl.remove();
-    agentMsg.querySelector('.msg-bubble').textContent = 'Network error: ' + err.message;
+    bubble.textContent = 'Network error: ' + err.message;
   }
 
   isRunning = false;

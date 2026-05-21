@@ -285,6 +285,99 @@ func (h *Handler) RunAgent(c *gin.Context) {
 	})
 }
 
+func (h *Handler) StreamAgent(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+
+	var req struct {
+		Prompt string `json:"prompt" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prompt required"})
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "config error"})
+		return
+	}
+
+	if len(cfg.LLMs) == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no LLM configured"})
+		return
+	}
+
+	var client *llm.Client
+	for _, lc := range cfg.LLMs {
+		client = &llm.Client{
+			APIBase:        lc.APIBase,
+			APIKey:         lc.APIKey,
+			Model:          lc.Model,
+			APIMode:        lc.APIMode,
+			Name:           lc.Name,
+			Stream:         lc.Stream,
+			MaxTokens:      lc.MaxTokens,
+			Temperature:    lc.Temperature,
+			ContextWin:     lc.ContextWin,
+			ConnectTimeout: time.Duration(lc.ConnectTimeout) * time.Second,
+			ReadTimeout:    time.Duration(lc.ReadTimeout) * time.Second,
+			MaxRetries:     lc.MaxRetries,
+		}
+		break
+	}
+
+	userDir := h.wsMgr.UserDir(userID)
+	memMgr := memory.NewManager(h.rootDir)
+	sysPrompt := buildSystemPrompt(memMgr)
+	toolsSchema := loadToolsSchema(h.rootDir)
+
+	a := agent.New(client, sysPrompt, toolsSchema)
+	a.Verbose = true
+	a.MaxTurns = 80
+
+	router := tool.NewRouter(userDir)
+	router.SkillDir = h.skillDir
+	router.AllowedDirs = []string{h.skillDir}
+	a.Handler = router.Dispatch
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	ch := a.Run(req.Prompt, "sse")
+
+	var finalContent string
+
+	for item := range ch {
+		data, _ := json.Marshal(map[string]any{
+			"content": item.Content,
+			"turn":    item.Turn,
+			"done":    item.Done,
+			"source":  item.Source,
+		})
+
+		if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
+			a.Abort()
+			break
+		}
+		c.Writer.(http.Flusher).Flush()
+
+		if item.Done {
+			// no-op
+		} else if item.Source == "final" {
+			finalContent += item.Content
+		}
+	}
+
+	if finalContent == "" {
+		finalContent = "Task completed."
+	}
+
+	h.saveChatMessage(userID, "user", req.Prompt)
+	h.saveChatMessage(userID, "agent", finalContent)
+}
+
 func (h *Handler) WebSocketAgent(c *gin.Context) {
 	userID := c.GetInt64("user_id")
 
