@@ -267,6 +267,28 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   background:var(--surface-2);border-radius:4px;display:inline-block;margin-top:.25rem;
 }
 
+.msg-tool-step{
+  margin:.5rem 0;padding:.5rem .75rem;
+  background:var(--surface-2);border:1px solid var(--border-subtle);
+  border-radius:6px;border-left:3px solid var(--accent);
+}
+.tool-step-header{
+  display:flex;align-items:center;gap:.375rem;
+  color:var(--accent);font-size:.75rem;font-weight:500;
+}
+.tool-step-header svg{flex-shrink:0;opacity:.7}
+.tool-step-name{font-family:var(--mono);font-size:.75rem}
+.tool-step-args{
+  margin-top:.375rem;padding:.375rem .5rem;
+  background:var(--code-bg);border-radius:4px;
+  overflow-x:auto;max-height:120px;overflow-y:auto;
+}
+.tool-step-args pre{
+  font-family:var(--mono);font-size:.6875rem;
+  color:var(--text-3);line-height:1.5;
+  margin:0;white-space:pre-wrap;word-break:break-all;
+}
+
 .chat-input-area{padding:1rem 1.5rem 1.25rem;border-top:1px solid var(--border-subtle)}
 .input-wrapper{
   display:flex;align-items:flex-end;gap:.5rem;
@@ -486,15 +508,50 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   #sidebar.open{transform:translateX(0)}
   #mobileMenuBtn{display:flex}
   .chat-header{padding:.75rem 1rem}
-  .chat-messages{padding:1rem}
-  .chat-input-area{padding:.75rem 1rem 1rem}
+  .chat-messages{padding:.75rem}
+  .chat-input-area{padding:.625rem .75rem .875rem}
   .msg{max-width:100%}
   .view-header{padding:.75rem 1rem}
   .file-list,.skill-list{padding:.75rem 1rem}
   .template-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
   .input-wrapper{padding:.25rem .25rem .25rem .75rem}
-  .file-item{flex-wrap:wrap}
+  .file-item{flex-wrap:wrap;gap:.5rem}
   .file-actions{width:100%;justify-content:flex-end;margin-top:.25rem}
+  .file-actions button{padding:.375rem .625rem;font-size:.75rem}
+  .msg-bubble{padding:.625rem .875rem;font-size:.8125rem}
+  .msg-bubble pre{font-size:.75rem;padding:.5rem}
+  .msg-bubble code{font-size:.75rem}
+  .msg-bubble h1{font-size:1.125rem}
+  .msg-bubble h2{font-size:1rem}
+  .msg-bubble h3{font-size:.9375rem}
+  .msg-bubble table{font-size:.75rem}
+  .msg-bubble td{padding:.25rem .375rem}
+  .preview-content{max-width:calc(100vw - 1rem);max-height:95vh}
+  .skill-card-header{padding:.625rem .75rem}
+  .template-grid{grid-template-columns:1fr}
+  .session-section{max-height:180px}
+  .tool-step-args pre{font-size:.625rem}
+  .empty-state{padding:2rem .75rem}
+  .empty-state p{font-size:.8125rem}
+}
+@media(max-width:480px){
+  .sidebar-header{padding:.875rem .75rem}
+  .logo span{font-size:.8125rem}
+  .nav-item{font-size:.75rem;padding:.375rem .5rem}
+  .chat-messages{padding:.5rem}
+  .chat-input-area{padding:.5rem .5rem .625rem}
+  .input-wrapper{padding:.25rem .25rem .25rem .5rem}
+  .input-wrapper textarea{font-size:.8125rem}
+  .send-btn{width:32px;height:32px}
+  .msg-bubble{padding:.5rem .625rem;font-size:.8125rem;line-height:1.6}
+  .file-item{padding:.5rem .625rem}
+  .file-icon,.skill-icon{width:28px;height:28px;font-size:.6875rem}
+  .file-name,.skill-name{font-size:.75rem}
+  .file-meta,.skill-desc{font-size:.625rem}
+  .view-header h2{font-size:.875rem}
+  .preview-content{border-radius:var(--radius)}
+  .preview-body{padding:.5rem}
+  .preview-code{font-size:.6875rem;max-height:40vh}
 }
 
 @media(min-width:769px) and (max-width:1024px){
