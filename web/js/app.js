@@ -505,7 +505,7 @@ function previewFile(path, name) {
   } else if (pdfExts.indexOf(ext) !== -1) {
     body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>';
   } else if (htmlExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px" sandbox></iframe>';
+    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>';
   } else if (textExts.indexOf(ext) !== -1 || ext === '') {
     fetchTextPreview(previewUrl, name);
   } else {
