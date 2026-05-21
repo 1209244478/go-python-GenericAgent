@@ -101,6 +101,7 @@ var blockedCommands = []string{
 	"node -e",
 	"php -r",
 	"env ",
+	"env\n",
 	"printenv",
 	"export ",
 	"source ",
@@ -848,6 +849,14 @@ func (r *Router) isCodeBlocked(code string, codeType string) (bool, string) {
 		normalized := normalizeShellCode(lowerCode)
 		for _, cmd := range blockedCommands {
 			if strings.Contains(normalized, strings.ToLower(cmd)) {
+				return true, "dangerous system command is not allowed (" + cmd + ")"
+			}
+		}
+
+		exactBlockedCommands := []string{"env"}
+		for _, cmd := range exactBlockedCommands {
+			pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(cmd) + `\b`)
+			if pattern.MatchString(normalized) {
 				return true, "dangerous system command is not allowed (" + cmd + ")"
 			}
 		}
