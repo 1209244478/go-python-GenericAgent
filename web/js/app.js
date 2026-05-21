@@ -8,7 +8,42 @@ try { user = JSON.parse(localStorage.getItem('user') || 'null'); } catch(e) {}
 
 if (!token) { window.location.href = '/login'; }
 
+function initTheme() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('themeIconDark').style.display = 'none';
+    document.getElementById('themeIconLight').style.display = 'block';
+  }
+}
+
+function toggleTheme() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  if (isLight) {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme', 'dark');
+    document.getElementById('themeIconDark').style.display = 'block';
+    document.getElementById('themeIconLight').style.display = 'none';
+  } else {
+    document.documentElement.setAttribute('data-theme', 'light');
+    localStorage.setItem('theme', 'light');
+    document.getElementById('themeIconDark').style.display = 'none';
+    document.getElementById('themeIconLight').style.display = 'block';
+  }
+}
+
+function openMobileSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('mobileOverlay').classList.add('show');
+}
+
+function closeMobileSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('mobileOverlay').classList.remove('show');
+}
+
 function init() {
+  initTheme();
   if (user) {
     document.getElementById('userName').textContent = user.name || user.email;
     document.getElementById('userEmail').textContent = user.email;
@@ -24,6 +59,7 @@ function switchView(view, el) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('view-' + view).classList.add('active');
   if (el) el.classList.add('active');
+  closeMobileSidebar();
 }
 
 function toggleUserMenu() {

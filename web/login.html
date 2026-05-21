@@ -13,6 +13,15 @@
   --text:#fafafa;--text-2:#a1a1aa;--text-3:#71717a;
   --accent:#10b981;--accent-hover:#34d399;--accent-dim:rgba(16,185,129,.12);
   --radius:10px;--radius-lg:16px;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  --code-bg:#0d0d0f;
+}
+[data-theme="light"]{
+  --bg:#f8f9fa;--surface:#ffffff;--surface-2:#f1f3f5;--border:#dee2e6;
+  --text:#1a1a2e;--text-2:#495057;--text-3:#868e96;
+  --accent:#0d9668;--accent-hover:#0b8462;--accent-dim:rgba(13,150,104,.08);
+  --shadow-sm:0 1px 3px rgba(0,0,0,.06);
+  --code-bg:#f1f3f5;
 }
 html,body{height:100%;font-family:'Geist',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
 body{display:flex;align-items:center;justify-content:center;min-height:100dvh;padding:1.5rem}
@@ -21,6 +30,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100dvh;pa
   width:100%;max-width:420px;
   background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
   padding:2.5rem;position:relative;overflow:hidden;
+  box-shadow:var(--shadow-sm);
 }
 .auth-card::before{
   content:'';position:absolute;top:0;left:0;right:0;height:1px;
@@ -84,9 +94,22 @@ body{display:flex;align-items:center;justify-content:center;min-height:100dvh;pa
 </head>
 <body>
 
+<script>
+(function(){
+  var t=localStorage.getItem('theme');
+  if(t==='light')document.documentElement.setAttribute('data-theme','light');
+})();
+</script>
+
 <div class="auth-card">
   <div class="brand">
-    <h1>GenericAgent</h1>
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h1>GenericAgent</h1>
+      <button onclick="toggleLoginTheme()" style="width:32px;height:32px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-3);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s ease" title="Toggle theme">
+        <svg id="loginThemeIconDark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg id="loginThemeIconLight" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+      </button>
+    </div>
     <p>AI-powered autonomous agent platform</p>
   </div>
 
@@ -138,6 +161,29 @@ body{display:flex;align-items:center;justify-content:center;min-height:100dvh;pa
 <script>
 const API='';
 let codeTimer=0;
+
+function toggleLoginTheme(){
+  var isLight=document.documentElement.getAttribute('data-theme')==='light';
+  if(isLight){
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme','dark');
+    document.getElementById('loginThemeIconDark').style.display='block';
+    document.getElementById('loginThemeIconLight').style.display='none';
+  }else{
+    document.documentElement.setAttribute('data-theme','light');
+    localStorage.setItem('theme','light');
+    document.getElementById('loginThemeIconDark').style.display='none';
+    document.getElementById('loginThemeIconLight').style.display='block';
+  }
+}
+
+(function(){
+  var t=localStorage.getItem('theme');
+  if(t==='light'){
+    document.getElementById('loginThemeIconDark').style.display='none';
+    document.getElementById('loginThemeIconLight').style.display='block';
+  }
+})();
 
 function switchTab(tab){
   document.querySelectorAll('.tab').forEach((t,i)=>{
