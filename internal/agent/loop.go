@@ -73,6 +73,7 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 
 		var exitReason map[string]any
 		turn := 0
+		var fullResponseText string
 
 		for turn < a.MaxTurns {
 			a.mu.Lock()
@@ -117,6 +118,8 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 					break
 				}
 			}
+
+			fullResponseText += fullContent
 
 			response = &llm.Response{
 				Content:   fullContent,
@@ -201,7 +204,7 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 		}
 
 		doneContent := fmt.Sprintf("\n[Done] %v", exitReason["result"])
-		ch <- DisplayItem{Turn: turn, Content: doneContent, Done: true, Source: source}
+		ch <- DisplayItem{Turn: turn, Content: fullResponseText, Done: true, Source: source, Outputs: []string{doneContent}}
 	}()
 	return ch
 }

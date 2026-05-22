@@ -170,7 +170,10 @@ async function sendMessage() {
           bubble.innerHTML = renderMarkdown(fullContent);
         } else if (d.done) {
           if (typingEl.parentNode) typingEl.remove();
-          if (!fullContent) {
+          if (!fullContent && d.content) {
+            fullContent = d.content;
+            bubble.innerHTML = renderMarkdown(fullContent);
+          } else if (!fullContent) {
             bubble.innerHTML = renderMarkdown('Task completed.');
           }
         }
@@ -424,7 +427,10 @@ async function sendMessageText(text) {
           bubble.innerHTML = renderMarkdown(fullContent);
         } else if (d.done) {
           if (typingEl.parentNode) typingEl.remove();
-          if (!fullContent) {
+          if (!fullContent && d.content) {
+            fullContent = d.content;
+            bubble.innerHTML = renderMarkdown(fullContent);
+          } else if (!fullContent) {
             bubble.innerHTML = renderMarkdown('Task completed.');
           }
         }

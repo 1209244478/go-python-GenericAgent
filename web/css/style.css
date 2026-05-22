@@ -289,6 +289,19 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   margin:0;white-space:pre-wrap;word-break:break-all;
 }
 
+details{
+  background:var(--surface-2);border:1px solid var(--border-subtle);
+  border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;
+  font-size:.875rem;cursor:pointer;
+}
+details[open]{background:var(--surface-3)}
+summary{
+  font-size:.875rem;font-weight:500;color:var(--text-2);
+  padding:.25rem 0;outline:none;user-select:none;
+}
+summary:hover{color:var(--accent)}
+details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
+
 .chat-input-area{padding:1rem 1.5rem 1.25rem;border-top:1px solid var(--border-subtle)}
 .input-wrapper{
   display:flex;align-items:flex-end;gap:.5rem;
@@ -531,8 +544,16 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   .template-grid{grid-template-columns:1fr}
   .session-section{max-height:180px}
   .tool-step-args pre{font-size:.625rem}
+  .msg-tool-step{padding:.375rem .5rem}
+  .tool-step-header{font-size:.6875rem}
+  .tool-step-name{font-size:.6875rem}
+  .tool-step-args{margin-top:.25rem;padding:.25rem .375rem;max-height:80px}
   .empty-state{padding:2rem .75rem}
   .empty-state p{font-size:.8125rem}
+  .msg-label{font-size:.625rem}
+  .status-badge{font-size:.625rem;padding:.1rem .375rem}
+  details{padding:.375rem .5rem;font-size:.8125rem}
+  summary{font-size:.8125rem;padding:.25rem 0}
 }
 @media(max-width:480px){
   .sidebar-header{padding:.875rem .75rem}
@@ -552,6 +573,12 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   .preview-content{border-radius:var(--radius)}
   .preview-body{padding:.5rem}
   .preview-code{font-size:.6875rem;max-height:40vh}
+  .msg-tool-step{padding:.3125rem .375rem}
+  .tool-step-header{font-size:.625rem}
+  .tool-step-name{font-size:.625rem}
+  .tool-step-args pre{font-size:.5625rem}
+  details{padding:.25rem .375rem;font-size:.75rem}
+  summary{font-size:.75rem}
 }
 
 @media(min-width:769px) and (max-width:1024px){

@@ -362,6 +362,7 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 			"turn":    item.Turn,
 			"done":    item.Done,
 			"source":  item.Source,
+			"outputs": item.Outputs,
 		})
 
 		if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
@@ -371,7 +372,9 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 		c.Writer.(http.Flusher).Flush()
 
 		if item.Done {
-			// no-op
+			if item.Content != "" {
+				finalContent = item.Content
+			}
 		} else if item.Source == "final" {
 			finalContent += item.Content
 		}
