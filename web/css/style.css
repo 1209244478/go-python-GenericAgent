@@ -248,8 +248,15 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
 .msg-bubble p:first-child{margin-top:0}
 .msg-bubble p:last-child{margin-bottom:0}
 
-.msg-bubble ul,.msg-bubble ol{margin:.375rem 0;padding-left:1.25rem}
-.msg-bubble li{margin:.125rem 0;line-height:1.6}
+.msg-bubble ul,.msg-bubble ol{margin:.375rem 0;padding-left:1.25rem;list-style-position:outside}
+.msg-bubble ul{list-style-type:disc}
+.msg-bubble ul ul{list-style-type:circle}
+.msg-bubble ul ul ul{list-style-type:square}
+.msg-bubble ol{list-style-type:decimal}
+.msg-bubble li{margin:.25rem 0;line-height:1.6;color:var(--text-2)}
+.msg-bubble li::marker{color:var(--accent);font-weight:500}
+.msg-bubble li strong,.msg-bubble li em{color:var(--text)}
+.msg-bubble li code{color:var(--accent)}
 
 .msg-bubble table{width:100%;border-collapse:collapse;margin:.5rem 0;font-size:.8125rem}
 .msg-bubble td{padding:.375rem .625rem;border:1px solid var(--border-subtle);text-align:left}
@@ -272,6 +279,10 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   background:var(--surface-2);border:1px solid var(--border-subtle);
   border-radius:6px;border-left:3px solid var(--accent);
 }
+.msg-tool-history{
+  max-width:600px;align-self:flex-start;
+}
+.msg-tool-history .msg-tool-step{margin:0}
 .tool-step-header{
   display:flex;align-items:center;gap:.375rem;
   color:var(--accent);font-size:.75rem;font-weight:500;
@@ -435,6 +446,22 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
 }
 .icard-choice-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
 .icard-choice-btn:active{transform:scale(.97)}
+.icard-pages{position:relative}
+.icard-page{display:none}
+.icard-page.active{display:block}
+.icard-pagination{
+  display:flex;align-items:center;justify-content:center;gap:.5rem;
+  margin-top:.75rem;padding-top:.5rem;border-top:1px solid var(--border-subtle);
+}
+.icard-page-btn{
+  width:28px;height:28px;border-radius:6px;border:1px solid var(--border-subtle);
+  background:var(--surface);color:var(--text-3);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all .15s ease;
+}
+.icard-page-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.icard-page-btn:disabled{opacity:.3;cursor:not-allowed}
+.icard-page-info{font-size:.75rem;color:var(--text-3);font-weight:500}
 .icard-answered{
   font-size:.875rem;color:var(--text-2);padding:.25rem 0;
 }
@@ -545,6 +572,7 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
   .session-section{max-height:180px}
   .tool-step-args pre{font-size:.625rem}
   .msg-tool-step{padding:.375rem .5rem}
+  .msg-tool-history{max-width:100%}
   .tool-step-header{font-size:.6875rem}
   .tool-step-name{font-size:.6875rem}
   .tool-step-args{margin-top:.25rem;padding:.25rem .375rem;max-height:80px}

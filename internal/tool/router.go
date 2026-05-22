@@ -373,6 +373,9 @@ func (r *Router) doAskUser(args map[string]any) *agent.StepOutcome {
 func (r *Router) doFileRead(args map[string]any) *agent.StepOutcome {
 	path := strArg(args, "path", "")
 	start := intArg(args, "start", 1)
+	if offset := intArg(args, "offset", 0); offset > 0 {
+		start = offset
+	}
 	count := intArg(args, "count", 200)
 	keyword := strArg(args, "keyword", "")
 

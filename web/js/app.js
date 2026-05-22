@@ -202,7 +202,11 @@ async function loadChatHistory() {
       const container = document.getElementById('chatMessages');
       container.innerHTML = '';
       messages.forEach(m => {
-        appendMessage(m.role, m.content);
+        if (m.role === 'tool') {
+          appendToolHistory(m.content);
+        } else {
+          appendMessage(m.role, m.content);
+        }
       });
       if (messages.length === 0) {
         container.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><p>Describe your task and the agent will execute it autonomously.</p></div>';
@@ -249,6 +253,7 @@ function updateStatus(state) {
 
 function renderMarkdown(text) {
   let html = text
+    .replace(/<summary>[\s\S]*?<\/summary>/g, '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   html = html.replace(/```interactive\n([\s\S]*?)```/g, function(m, jsonStr) {
@@ -330,12 +335,44 @@ function renderInteractiveCard(cfg) {
     '</div>';
   }
   if (cfg.type === 'choice') {
-    var opts = (cfg.options || []).map(function(opt, i) {
-      return '<button class="icard-choice-btn" onclick="submitInteractiveChoice(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\',\'' + escAttr(opt) + '\')">' + escHtml(opt) + '</button>';
-    }).join('');
+    var allOpts = cfg.options || [];
+    var pageSize = 5;
+    var totalPages = Math.ceil(allOpts.length / pageSize);
+    if (allOpts.length <= pageSize) {
+      var opts = allOpts.map(function(opt, i) {
+        return '<button class="icard-choice-btn" onclick="submitInteractiveChoice(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\',\'' + escAttr(opt) + '\')">' + escHtml(opt) + '</button>';
+      }).join('');
+      return '<div class="interactive-card" id="' + cardId + '">' +
+        '<div class="icard-question">' + escHtml(cfg.question || '') + '</div>' +
+        '<div class="icard-choices">' + opts + '</div>' +
+      '</div>';
+    }
+
+    var pagesHtml = '';
+    for (var p = 0; p < totalPages; p++) {
+      var pageOpts = allOpts.slice(p * pageSize, (p + 1) * pageSize);
+      var pageBtns = pageOpts.map(function(opt, i) {
+        return '<button class="icard-choice-btn" onclick="submitInteractiveChoice(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\',\'' + escAttr(opt) + '\')">' + escHtml(opt) + '</button>';
+      }).join('');
+      pagesHtml += '<div class="icard-page' + (p === 0 ? ' active' : '') + '" data-page="' + p + '">' +
+        '<div class="icard-choices">' + pageBtns + '</div>' +
+      '</div>';
+    }
+
+    var paginationHtml = totalPages > 1 ? '<div class="icard-pagination">' +
+      '<button class="icard-page-btn icard-page-prev" onclick="flipChoicePage(event,\'' + cardId + '\',-1)" disabled>' +
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>' +
+      '</button>' +
+      '<span class="icard-page-info">1/' + totalPages + '</span>' +
+      '<button class="icard-page-btn icard-page-next" onclick="flipChoicePage(event,\'' + cardId + '\',1)">' +
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>' +
+      '</button>' +
+    '</div>' : '';
+
     return '<div class="interactive-card" id="' + cardId + '">' +
       '<div class="icard-question">' + escHtml(cfg.question || '') + '</div>' +
-      '<div class="icard-choices">' + opts + '</div>' +
+      '<div class="icard-pages">' + pagesHtml + '</div>' +
+      paginationHtml +
     '</div>';
   }
   return '<pre><code>' + escHtml(JSON.stringify(cfg)) + '</code></pre>';
@@ -358,6 +395,27 @@ function submitInteractiveChoice(cardId, fieldId, value) {
     card.innerHTML = '<div class="icard-answered"><span class="icard-label">' + escHtml(fieldId) + '</span> ' + escHtml(value) + '</div>';
   }
   sendMessageText('[用户选择] ' + fieldId + ': ' + value);
+}
+
+function flipChoicePage(event, cardId, dir) {
+  event.preventDefault();
+  var card = document.getElementById(cardId);
+  if (!card) return;
+  var pages = card.querySelectorAll('.icard-page');
+  var activeIdx = -1;
+  for (var i = 0; i < pages.length; i++) {
+    if (pages[i].classList.contains('active')) { activeIdx = i; break; }
+  }
+  var newIdx = activeIdx + dir;
+  if (newIdx < 0 || newIdx >= pages.length) return;
+  pages[activeIdx].classList.remove('active');
+  pages[newIdx].classList.add('active');
+  var info = card.querySelector('.icard-page-info');
+  if (info) info.textContent = (newIdx + 1) + '/' + pages.length;
+  var prev = card.querySelector('.icard-page-prev');
+  var next = card.querySelector('.icard-page-next');
+  if (prev) prev.disabled = newIdx === 0;
+  if (next) next.disabled = newIdx === pages.length - 1;
 }
 
 async function sendMessageText(text) {
@@ -652,6 +710,21 @@ function renderSkills(skills) {
 function toggleSkillDetail(el) {
   const card = el.closest('.skill-card');
   card.classList.toggle('expanded');
+}
+
+function appendToolHistory(content) {
+  const container = document.getElementById('chatMessages');
+  const empty = container.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  const msg = document.createElement('div');
+  msg.className = 'msg msg-tool-history';
+  const card = document.createElement('div');
+  card.className = 'msg-tool-step';
+  card.innerHTML = renderToolStep(content);
+  msg.appendChild(card);
+  container.appendChild(msg);
+  return msg;
 }
 
 function renderToolStep(content) {

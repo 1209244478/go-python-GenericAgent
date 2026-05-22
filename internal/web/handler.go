@@ -355,6 +355,7 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 	ch := a.Run(req.Prompt, "sse")
 
 	var finalContent string
+	var toolSteps []string
 
 	for item := range ch {
 		data, _ := json.Marshal(map[string]any{
@@ -377,11 +378,21 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 			}
 		} else if item.Source == "final" {
 			finalContent += item.Content
+		} else if item.Source == "tool" && item.Content != "" {
+			toolSteps = append(toolSteps, item.Content)
 		}
 	}
 
 	if finalContent == "" {
 		finalContent = "Task completed."
+	}
+
+	for _, toolContent := range toolSteps {
+		if req.SessionID > 0 {
+			h.saveChatMessageSession(userID, req.SessionID, "tool", toolContent)
+		} else {
+			h.saveChatMessage(userID, "tool", toolContent)
+		}
 	}
 
 	if req.SessionID > 0 {
@@ -408,7 +419,8 @@ func (h *Handler) WebSocketAgent(c *gin.Context) {
 	}
 
 	var req struct {
-		Prompt string `json:"prompt"`
+		Prompt    string `json:"prompt"`
+		SessionID int64  `json:"session_id"`
 	}
 	json.Unmarshal(msg, &req)
 	if req.Prompt == "" {
@@ -452,6 +464,9 @@ func (h *Handler) WebSocketAgent(c *gin.Context) {
 
 	ch := a.Run(req.Prompt, "ws")
 
+	var finalContent string
+	var toolSteps []string
+
 	for item := range ch {
 		if err := conn.WriteJSON(gin.H{
 			"content": item.Content,
@@ -462,6 +477,36 @@ func (h *Handler) WebSocketAgent(c *gin.Context) {
 			a.Abort()
 			break
 		}
+
+		if item.Done {
+			if item.Content != "" {
+				finalContent = item.Content
+			}
+		} else if item.Source == "final" {
+			finalContent += item.Content
+		} else if item.Source == "tool" && item.Content != "" {
+			toolSteps = append(toolSteps, item.Content)
+		}
+	}
+
+	if finalContent == "" {
+		finalContent = "Task completed."
+	}
+
+	for _, toolContent := range toolSteps {
+		if req.SessionID > 0 {
+			h.saveChatMessageSession(userID, req.SessionID, "tool", toolContent)
+		} else {
+			h.saveChatMessage(userID, "tool", toolContent)
+		}
+	}
+
+	if req.SessionID > 0 {
+		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt)
+		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent)
+	} else {
+		h.saveChatMessage(userID, "user", req.Prompt)
+		h.saveChatMessage(userID, "agent", finalContent)
 	}
 }
 

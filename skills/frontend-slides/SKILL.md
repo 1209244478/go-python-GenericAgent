@@ -31,19 +31,22 @@ That's it. One call → finished HTML file. No reading templates, no file_write,
 
 ## How to Choose a Template
 
-### Option A: Let the user pick (fastest)
-Skip matching entirely. Just pick a template based on the topic:
+**ALWAYS let the user choose. NEVER pick a template yourself.**
+
+1. Use `match_templates` to find top 5 matching templates based on topic/mood
+2. Present them to the user via an interactive choice card:
+```interactive
+{"type":"choice","id":"template_slug","question":"请选择演示文稿模板风格","options":["blue-professional — Business/Tech","signal — Modern Tech","..."]}
+```
+3. Wait for user selection, then use the chosen slug in `generate` action
+
+**Template categories** (for match_templates hints, NOT for auto-selection):
 - **Business/Tech**: `blue-professional`, `signal`, `cartesian`, `studio`
 - **Creative/Bold**: `bold-poster`, `creative-mode`, `neo-grid-bold`, `coral`
 - **Editorial**: `editorial-forest`, `vellum`, `broadside`
 - **Warm/Friendly**: `capsule`, `daisy-days`, `playful`, `grove`
 - **Dark/Cyber**: `8-bit-orbit`, `pink-script`, `mat`, `retro-windows`
 - **Minimal**: `monochrome`, `cobalt-grid`, `raw-grid`
-
-### Option B: Match by metadata
-```
-skill_run(skill="frontend-slides", action="match_templates", keywords=["tech"], mood="professional")
-```
 Returns top 5 matches with slug and match score.
 
 ## Slide Layouts
