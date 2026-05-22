@@ -446,6 +446,18 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
 }
 .icard-choice-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
 .icard-choice-btn:active{transform:scale(.97)}
+.icard-choice-row{
+  display:flex;align-items:stretch;gap:.25rem;margin-bottom:.25rem;
+}
+.icard-choice-row .icard-choice-btn{flex:1;margin-bottom:0}
+.icard-preview-btn{
+  width:32px;min-width:32px;border-radius:6px;border:1px solid var(--border-subtle);
+  background:var(--surface);color:var(--text-3);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all .15s ease;padding:0;
+}
+.icard-preview-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.icard-preview-btn:active{transform:scale(.94)}
 .icard-pages{position:relative}
 .icard-page{display:none}
 .icard-page.active{display:block}
@@ -483,11 +495,21 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
 .preview-modal.show{display:flex}
 .preview-content{
   background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
-  min-width:320px;min-height:200px;
-  max-width:800px;max-height:90vh;
+  min-width:360px;min-height:200px;
+  max-width:860px;max-height:92vh;
   width:fit-content;height:fit-content;
   display:flex;flex-direction:column;
   box-shadow:var(--shadow-md);overflow:hidden;
+}
+.preview-content.preview-wide{
+  width:92vw;max-width:1280px;min-width:360px;
+}
+.preview-iframe{
+  width:100%;height:min(72vh,800px);border:none;border-radius:0 0 var(--radius-xl) var(--radius-xl);
+  flex:1;min-height:300px;
+}
+.preview-loading{
+  padding:3rem;text-align:center;color:var(--text-3);font-size:.875rem;
 }
 .preview-header{
   display:flex;align-items:center;justify-content:space-between;
@@ -515,7 +537,9 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
 @media(max-width:768px){
   .preview-modal{padding:.5rem}
   .preview-content{max-height:95vh;border-radius:var(--radius-lg)}
+  .preview-content.preview-wide{width:96vw;max-width:96vw}
   .preview-body{padding:.75rem}
+  .preview-iframe{height:min(60vh,500px)}
 }
 
 ::-webkit-scrollbar{width:6px}
@@ -567,6 +591,7 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
   .msg-bubble table{font-size:.75rem}
   .msg-bubble td{padding:.25rem .375rem}
   .preview-content{max-width:calc(100vw - 1rem);max-height:95vh}
+  .preview-content.preview-wide{width:96vw;max-width:96vw}
   .skill-card-header{padding:.625rem .75rem}
   .template-grid{grid-template-columns:1fr}
   .session-section{max-height:180px}

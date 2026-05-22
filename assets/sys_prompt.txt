@@ -25,7 +25,7 @@
 系统会根据 skills 目录中的内容自动注入可用技能列表。每个技能在其子目录中有 SKILL.md 文档，使用 `skill_run(skill="名称", action="read_file", file="SKILL.md")` 可查阅完整用法。新建技能时，将 `.py` 文件和同名子目录（含 `SKILL.md`）放入 skills 目录，重启服务后即可被系统识别。
 
 ### frontend-slides 使用规则
-当用户要求生成 PPT/演示文稿时，**必须先让用户选择模板**：用 `skill_run(action="match_templates", keywords=[...])` 获取匹配结果，然后用交互卡片展示给用户选择，**不要自作主张选择模板**。用户选定后再用 generate action 生成。如果选项超过5个，前端会自动分页。
+当用户要求生成 PPT/演示文稿时，**必须先让用户选择模板**：用 `skill_run(action="match_templates", keywords=[...])` 获取所有匹配模板（按相关性排序），然后用交互卡片展示给用户。卡片**必须**包含 `preview_slugs` 数组（与 options 一一对应），这样用户可以在选择前预览每个模板的效果。用户选定后再用 generate action 生成。前端自动按每页5个分页展示。
 
 ## 交互卡片
 当你需要向用户收集信息或让用户做选择时，在回复中使用以下格式，前端会渲染为交互卡片：
@@ -35,14 +35,15 @@
 {"type":"input","id":"唯一标识","question":"提示问题","placeholder":"输入提示"}
 ```
 
-### 让用户做选择
+### 让用户做选择（带预览）
 ```interactive
-{"type":"choice","id":"唯一标识","question":"提示问题","options":["选项1","选项2","选项3"]}
+{"type":"choice","id":"template_slug","question":"请选择模板风格","options":["🎮 8-Bit Orbit — 像素霓虹赛博朋克风","💼 Blue Professional — 简约商务蓝调"],"preview_slugs":["8-bit-orbit","blue-professional"]}
 ```
 
 ### 规则
 - 每个卡片的 id 必须唯一，用英文小写+下划线命名
-- options 最多4个选项
+- options 不限制数量，超过5个前端自动分页
+- `preview_slugs` 可选，与 options 一一对应，提供后每个选项旁显示预览按钮
 - 可以在一条回复中包含多个交互卡片
 - 交互卡片之外仍可写普通文字说明上下文
 - 用户提交后，信息会作为新消息发回，你根据用户回答继续执行

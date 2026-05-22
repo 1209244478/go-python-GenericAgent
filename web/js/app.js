@@ -336,12 +336,23 @@ function renderInteractiveCard(cfg) {
   }
   if (cfg.type === 'choice') {
     var allOpts = cfg.options || [];
+    var previewSlugs = cfg.preview_slugs || [];
     var pageSize = 5;
     var totalPages = Math.ceil(allOpts.length / pageSize);
+
+    function renderChoiceBtn(opt, i) {
+      var slug = previewSlugs[i] || '';
+      var previewBtn = slug ? '<button class="icard-preview-btn" onclick="event.stopPropagation();previewTemplateSlug(\'' + escAttr(slug) + '\')" title="Preview template">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>' +
+      '</button>' : '';
+      return '<div class="icard-choice-row">' +
+        '<button class="icard-choice-btn" onclick="submitInteractiveChoice(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\',\'' + escAttr(opt) + '\')">' + escHtml(opt) + '</button>' +
+        previewBtn +
+      '</div>';
+    }
+
     if (allOpts.length <= pageSize) {
-      var opts = allOpts.map(function(opt, i) {
-        return '<button class="icard-choice-btn" onclick="submitInteractiveChoice(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\',\'' + escAttr(opt) + '\')">' + escHtml(opt) + '</button>';
-      }).join('');
+      var opts = allOpts.map(renderChoiceBtn).join('');
       return '<div class="interactive-card" id="' + cardId + '">' +
         '<div class="icard-question">' + escHtml(cfg.question || '') + '</div>' +
         '<div class="icard-choices">' + opts + '</div>' +
@@ -351,8 +362,9 @@ function renderInteractiveCard(cfg) {
     var pagesHtml = '';
     for (var p = 0; p < totalPages; p++) {
       var pageOpts = allOpts.slice(p * pageSize, (p + 1) * pageSize);
+      var pageIdxStart = p * pageSize;
       var pageBtns = pageOpts.map(function(opt, i) {
-        return '<button class="icard-choice-btn" onclick="submitInteractiveChoice(\'' + cardId + '\',\'' + escAttr(cfg.id || '') + '\',\'' + escAttr(opt) + '\')">' + escHtml(opt) + '</button>';
+        return renderChoiceBtn(opt, pageIdxStart + i);
       }).join('');
       pagesHtml += '<div class="icard-page' + (p === 0 ? ' active' : '') + '" data-page="' + p + '">' +
         '<div class="icard-choices">' + pageBtns + '</div>' +
@@ -623,17 +635,53 @@ async function fetchHtmlPreview(url, body) {
     var html = await r.text();
     var iframe = document.createElement('iframe');
     iframe.sandbox = 'allow-scripts';
-    iframe.style.cssText = 'width:100%;height:80vh;border:none;border-radius:8px';
+    iframe.className = 'preview-iframe';
     iframe.srcdoc = html;
     body.innerHTML = '';
     body.appendChild(iframe);
+    var content = document.querySelector('.preview-content');
+    if (content) content.classList.add('preview-wide');
   } catch(e) {
     body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
   }
 }
 
 function closePreview() {
+  var content = document.querySelector('.preview-content');
+  if (content) content.classList.remove('preview-wide');
   document.getElementById('previewModal').classList.remove('show');
+}
+
+function previewTemplateSlug(slug) {
+  var path = 'skills/frontend-slides/templates/' + slug + '/template.html';
+  var previewUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(path) + '&token=' + token;
+
+  var modal = document.getElementById('previewModal');
+  var title = document.getElementById('previewTitle');
+  var body = document.getElementById('previewBody');
+  var content = modal.querySelector('.preview-content');
+
+  title.textContent = 'Template: ' + slug;
+  content.classList.add('preview-wide');
+
+  body.innerHTML = '<div class="preview-loading">Loading preview...</div>';
+
+  fetch(previewUrl).then(function(r) {
+    if (!r.ok) { body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load template</div>'; return; }
+    return r.text();
+  }).then(function(html) {
+    if (!html) return;
+    var iframe = document.createElement('iframe');
+    iframe.sandbox = 'allow-scripts';
+    iframe.className = 'preview-iframe';
+    body.innerHTML = '';
+    body.appendChild(iframe);
+    iframe.srcdoc = html;
+  }).catch(function(e) {
+    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
+  });
+
+  modal.classList.add('show');
 }
 
 function downloadFile(path) {

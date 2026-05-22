@@ -33,10 +33,10 @@ That's it. One call → finished HTML file. No reading templates, no file_write,
 
 **ALWAYS let the user choose. NEVER pick a template yourself.**
 
-1. Use `match_templates` to find top 5 matching templates based on topic/mood
-2. Present them to the user via an interactive choice card:
+1. Use `match_templates` to get all templates sorted by relevance
+2. Present ALL of them to the user via an interactive choice card with `preview_slugs` (frontend auto-paginates 5 per page, each option shows a preview eye icon):
 ```interactive
-{"type":"choice","id":"template_slug","question":"请选择演示文稿模板风格","options":["blue-professional — Business/Tech","signal — Modern Tech","..."]}
+{"type":"choice","id":"template_slug","question":"请选择演示文稿模板风格","options":["🎮 8-Bit Orbit — 像素霓虹赛博朋克风（深色）","💼 Blue Professional — 简约商务蓝调（专业正式）","..."],"preview_slugs":["8-bit-orbit","blue-professional","..."]}
 ```
 3. Wait for user selection, then use the chosen slug in `generate` action
 
@@ -47,7 +47,6 @@ That's it. One call → finished HTML file. No reading templates, no file_write,
 - **Warm/Friendly**: `capsule`, `daisy-days`, `playful`, `grove`
 - **Dark/Cyber**: `8-bit-orbit`, `pink-script`, `mat`, `retro-windows`
 - **Minimal**: `monochrome`, `cobalt-grid`, `raw-grid`
-Returns top 5 matches with slug and match score.
 
 ## Slide Layouts
 

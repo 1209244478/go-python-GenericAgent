@@ -89,7 +89,7 @@ def do_match_templates(args):
 
     scored.sort(key=lambda x: -x[0])
     results = []
-    for score, t in scored[:5]:
+    for score, t in scored:
         results.append({
             "slug": t["slug"],
             "name": t["name"],
