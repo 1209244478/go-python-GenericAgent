@@ -240,7 +240,7 @@ func (h *Handler) RunAgent(c *gin.Context) {
 
 	userDir := h.wsMgr.UserDir(userID)
 	memMgr := memory.NewManager(h.rootDir)
-	sysPrompt := buildSystemPrompt(memMgr, userDir)
+	sysPrompt := buildSystemPrompt(memMgr, userDir, h.skillDir)
 	toolsSchema := loadToolsSchema(h.rootDir)
 
 	a := agent.New(client, sysPrompt, toolsSchema)
@@ -335,7 +335,7 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 
 	userDir := h.wsMgr.UserDir(userID)
 	memMgr := memory.NewManager(h.rootDir)
-	sysPrompt := buildSystemPrompt(memMgr, userDir)
+	sysPrompt := buildSystemPrompt(memMgr, userDir, h.skillDir)
 	toolsSchema := loadToolsSchema(h.rootDir)
 
 	a := agent.New(client, sysPrompt, toolsSchema)
@@ -438,7 +438,7 @@ func (h *Handler) WebSocketAgent(c *gin.Context) {
 
 	userDir := h.wsMgr.UserDir(userID)
 	memMgr := memory.NewManager(h.rootDir)
-	sysPrompt := buildSystemPrompt(memMgr, userDir)
+	sysPrompt := buildSystemPrompt(memMgr, userDir, h.skillDir)
 	toolsSchema := loadToolsSchema(h.rootDir)
 
 	a := agent.New(client, sysPrompt, toolsSchema)
@@ -814,7 +814,65 @@ func (h *Handler) ListTemplates(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"templates": result})
 }
 
-func buildSystemPrompt(memMgr *memory.Manager, userDir string) string {
+func buildSkillsSection(skillDir string) string {
+	if skillDir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(skillDir)
+	if err != nil {
+		return ""
+	}
+
+	dirs := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && !strings.HasPrefix(entry.Name(), "_") {
+			dirs[entry.Name()] = true
+		}
+	}
+
+	var lines []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || entry.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(name, ".py") {
+			continue
+		}
+
+		skillName := strings.TrimSuffix(name, ".py")
+		desc := ""
+
+		if dirs[skillName] {
+			skillMd := filepath.Join(skillDir, skillName, "SKILL.md")
+			if data, err := os.ReadFile(skillMd); err == nil {
+				if d := extractSkillDescription(string(data)); d != "" {
+					desc = d
+				}
+			}
+		}
+
+		if desc == "" {
+			if data, err := os.ReadFile(filepath.Join(skillDir, name)); err == nil {
+				desc = extractPyDescription(string(data))
+			}
+		}
+
+		if desc == "" {
+			desc = "可用技能"
+		}
+
+		lines = append(lines, fmt.Sprintf("- **%s**: %s", skillName, desc))
+	}
+
+	if len(lines) == 0 {
+		return "\n当前无已安装技能。将技能 .py 文件放入 skills 目录即可。\n"
+	}
+
+	return "\n## 当前可用技能\n" + strings.Join(lines, "\n") + "\n"
+}
+
+func buildSystemPrompt(memMgr *memory.Manager, userDir string, skillDir string) string {
 	promptPath := filepath.Join(config.RootDir(), "assets", "sys_prompt.txt")
 	data, err := os.ReadFile(promptPath)
 	if err != nil {
@@ -824,6 +882,10 @@ func buildSystemPrompt(memMgr *memory.Manager, userDir string) string {
 	if userDir != "" {
 		prompt += fmt.Sprintf("\n## 工作目录\n你的工作目录 (CWD) 是: %s。所有 file_write、file_read、code_run 生成的文件默认都在此目录下。skill_run 生成的文件如果不指定 output_path 也会在此目录。\n", userDir)
 	}
+	if skillDir != "" {
+		prompt += fmt.Sprintf("\n## 技能目录\n技能安装目录: %s\n", skillDir)
+	}
+	prompt += buildSkillsSection(skillDir)
 	prompt += fmt.Sprintf("\nToday: %s %s\n", time.Now().Format("2006-01-02"), time.Now().Format("Mon"))
 	globalMem := memMgr.GetGlobalMemory()
 	if globalMem != "" {

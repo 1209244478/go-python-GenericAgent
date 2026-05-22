@@ -22,7 +22,7 @@
 当用户请求涉及以上操作时，回复："⚠️ 该操作违反安全策略：[具体原因]。如需执行，请联系管理员手动操作。"
 
 ## 已安装技能
-- **frontend-slides**: 模板化HTML演示文稿生成器，34种精选模板。**一步生成**：skill_run(skill="frontend-slides", action="generate", slug="模板名", title="标题", slides=[{layout,heading,body,items}...], output_path="文件名.html")。output_path 必须是相对于工作目录的路径（如 ai-era.html），不要用绝对路径。如果不填 output_path，文件会默认保存到当前工作目录。禁止用 file_write 从零写 HTML，必须用 generate action。模板负责设计，AI只提供内容。
+系统会根据 skills 目录中的内容自动注入可用技能列表。每个技能在其子目录中有 SKILL.md 文档，使用 `skill_run(skill="名称", action="read_file", file="SKILL.md")` 可查阅完整用法。新建技能时，将 `.py` 文件和同名子目录（含 `SKILL.md`）放入 skills 目录，重启服务后即可被系统识别。
 
 ## 交互卡片
 当你需要向用户收集信息或让用户做选择时，在回复中使用以下格式，前端会渲染为交互卡片：
