@@ -74,7 +74,7 @@
   }},
   {"type": "function", "function": {
     "name": "skill_run",
-    "description": "Run a Python skill. Available: frontend-slides (template-based HTML slides, one-call generation). MUST use generate action for presentations, NEVER use file_write to create HTML",
+    "description": "Run a Python skill. Available: frontend-slides (template-based HTML slides, one-call generation). For presentations: 1) match_templates → 2) let user pick template → 3) ask for topic/content → 4) generate. NEVER use file_write to create HTML",
     "parameters": {"type": "object", "properties": {
       "skill": {"type": "string", "description": "Skill name, e.g. frontend-slides"},
       "action": {"type": "string", "description": "Action: generate (one-call output), match_templates, read_template, list_templates, info, read_file"},
