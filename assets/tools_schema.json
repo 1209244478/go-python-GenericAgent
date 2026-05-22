@@ -88,7 +88,7 @@
         "body": {"type": "string", "description": "Slide body/subtitle text"},
         "items": {"type": "array", "items": {"type": "string"}, "description": "Bullet items for the slide"}}}, "description": "[generate] Slide content array. Each slide: {layout, heading, body, items}"},
       "replacements": {"type": "object", "additionalProperties": {"type": "string"}, "description": "[generate] Fine-grained text replacements: old_text -> new_text"},
-      "output_path": {"type": "string", "description": "[generate] Output HTML file path"},
+      "output_path": {"type": "string", "description": "[generate] Output HTML file path (relative to workspace, e.g. ai-era.html). If omitted, file is saved to CWD"},
       "keywords": {"type": "array", "items": {"type": "string"}, "description": "[match_templates] Topic keywords"},
       "mood": {"type": "string", "description": "[match_templates] Desired mood"},
       "occasion": {"type": "string", "description": "[match_templates] Use case"},

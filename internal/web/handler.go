@@ -240,7 +240,7 @@ func (h *Handler) RunAgent(c *gin.Context) {
 
 	userDir := h.wsMgr.UserDir(userID)
 	memMgr := memory.NewManager(h.rootDir)
-	sysPrompt := buildSystemPrompt(memMgr)
+	sysPrompt := buildSystemPrompt(memMgr, userDir)
 	toolsSchema := loadToolsSchema(h.rootDir)
 
 	a := agent.New(client, sysPrompt, toolsSchema)
@@ -335,7 +335,7 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 
 	userDir := h.wsMgr.UserDir(userID)
 	memMgr := memory.NewManager(h.rootDir)
-	sysPrompt := buildSystemPrompt(memMgr)
+	sysPrompt := buildSystemPrompt(memMgr, userDir)
 	toolsSchema := loadToolsSchema(h.rootDir)
 
 	a := agent.New(client, sysPrompt, toolsSchema)
@@ -438,7 +438,7 @@ func (h *Handler) WebSocketAgent(c *gin.Context) {
 
 	userDir := h.wsMgr.UserDir(userID)
 	memMgr := memory.NewManager(h.rootDir)
-	sysPrompt := buildSystemPrompt(memMgr)
+	sysPrompt := buildSystemPrompt(memMgr, userDir)
 	toolsSchema := loadToolsSchema(h.rootDir)
 
 	a := agent.New(client, sysPrompt, toolsSchema)
@@ -814,13 +814,16 @@ func (h *Handler) ListTemplates(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"templates": result})
 }
 
-func buildSystemPrompt(memMgr *memory.Manager) string {
+func buildSystemPrompt(memMgr *memory.Manager, userDir string) string {
 	promptPath := filepath.Join(config.RootDir(), "assets", "sys_prompt.txt")
 	data, err := os.ReadFile(promptPath)
 	if err != nil {
 		data = []byte("You are GenericAgent, a helpful autonomous AI assistant.")
 	}
 	prompt := string(data)
+	if userDir != "" {
+		prompt += fmt.Sprintf("\n## 工作目录\n你的工作目录 (CWD) 是: %s。所有 file_write、file_read、code_run 生成的文件默认都在此目录下。skill_run 生成的文件如果不指定 output_path 也会在此目录。\n", userDir)
+	}
 	prompt += fmt.Sprintf("\nToday: %s %s\n", time.Now().Format("2006-01-02"), time.Now().Format("Mon"))
 	globalMem := memMgr.GetGlobalMemory()
 	if globalMem != "" {
