@@ -3,6 +3,7 @@ let token = localStorage.getItem('token');
 let user = null;
 let ws = null;
 let isRunning = false;
+let abortController = null;
 let currentSessionId = 0;
 
 try { user = JSON.parse(localStorage.getItem('user') || 'null'); } catch(e) {}
@@ -108,6 +109,7 @@ async function sendMessage() {
   input.style.height = 'auto';
   isRunning = true;
   updateStatus('running');
+  setRunningUI(true);
 
   appendMessage('user', text);
 
@@ -117,6 +119,7 @@ async function sendMessage() {
   bubble.appendChild(typingEl);
 
   var fullContent = '';
+  abortController = new AbortController();
 
   try {
     var r = await fetch(API + '/api/agent/stream', {
@@ -125,7 +128,8 @@ async function sendMessage() {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token
       },
-      body: JSON.stringify({ prompt: text, session_id: currentSessionId })
+      body: JSON.stringify({ prompt: text, session_id: currentSessionId }),
+      signal: abortController.signal
     });
 
     if (r.status === 401) { handleLogout(); return; }
@@ -180,13 +184,37 @@ async function sendMessage() {
       }
     }
   } catch (err) {
-    typingEl.remove();
-    bubble.textContent = 'Network error: ' + err.message;
+    if (err.name === 'AbortError') {
+      if (typingEl.parentNode) typingEl.remove();
+      if (!fullContent) {
+        bubble.innerHTML = renderMarkdown('_Stopped._');
+      } else {
+        fullContent += '\n\n_Stopped._';
+        bubble.innerHTML = renderMarkdown(fullContent);
+      }
+    } else {
+      if (typingEl.parentNode) typingEl.remove();
+      bubble.textContent = 'Network error: ' + err.message;
+    }
   }
 
   isRunning = false;
+  abortController = null;
   updateStatus('ready');
+  setRunningUI(false);
   loadFiles();
+}
+
+function stopMessage() {
+  if (abortController) {
+    abortController.abort();
+  }
+}
+
+function setRunningUI(running) {
+  document.getElementById('sendBtn').style.display = running ? 'none' : '';
+  document.getElementById('stopBtn').style.display = running ? '' : 'none';
+  document.getElementById('chatInput').disabled = running;
 }
 
 async function loadChatHistory() {
@@ -434,6 +462,7 @@ async function sendMessageText(text) {
   if (isRunning) return;
   isRunning = true;
   updateStatus('running');
+  setRunningUI(true);
 
   appendMessage('user', text);
 
@@ -443,6 +472,7 @@ async function sendMessageText(text) {
   bubble.appendChild(typingEl);
 
   var fullContent = '';
+  abortController = new AbortController();
 
   try {
     var r = await fetch(API + '/api/agent/stream', {
@@ -451,7 +481,8 @@ async function sendMessageText(text) {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token
       },
-      body: JSON.stringify({ prompt: text, session_id: currentSessionId })
+      body: JSON.stringify({ prompt: text, session_id: currentSessionId }),
+      signal: abortController.signal
     });
 
     if (r.status === 401) { handleLogout(); return; }
@@ -507,12 +538,24 @@ async function sendMessageText(text) {
       }
     }
   } catch (err) {
-    typingEl.remove();
-    bubble.textContent = 'Network error: ' + err.message;
+    if (err.name === 'AbortError') {
+      if (typingEl.parentNode) typingEl.remove();
+      if (!fullContent) {
+        bubble.innerHTML = renderMarkdown('_Stopped._');
+      } else {
+        fullContent += '\n\n_Stopped._';
+        bubble.innerHTML = renderMarkdown(fullContent);
+      }
+    } else {
+      if (typingEl.parentNode) typingEl.remove();
+      bubble.textContent = 'Network error: ' + err.message;
+    }
   }
 
   isRunning = false;
+  abortController = null;
   updateStatus('ready');
+  setRunningUI(false);
   loadFiles();
 }
 
@@ -576,136 +619,207 @@ function previewFile(path, name) {
   var pdfExts = ['pdf'];
   var htmlExts = ['html','htm'];
 
+  var tabId = 'file:' + path;
   var previewUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(path) + '&token=' + token;
 
+  if (imageExts.indexOf(ext) !== -1) {
+    openPreviewTab(tabId, name || path, false, function(panel) {
+      panel.innerHTML = '<img src="' + previewUrl + '" style="max-width:100%;max-height:80vh;border-radius:8px;display:block" alt="' + escHtml(name) + '">';
+    });
+  } else if (videoExts.indexOf(ext) !== -1) {
+    openPreviewTab(tabId, name || path, false, function(panel) {
+      panel.innerHTML = '<video src="' + previewUrl + '" controls style="max-width:100%;max-height:80vh;border-radius:8px;display:block"></video>';
+    });
+  } else if (audioExts.indexOf(ext) !== -1) {
+    openPreviewTab(tabId, name || path, false, function(panel) {
+      panel.innerHTML = '<div style="padding:2rem;text-align:center"><div style="font-size:3rem;margin-bottom:1rem">&#9835;</div><audio src="' + previewUrl + '" controls style="width:100%"></audio></div>';
+    });
+  } else if (pdfExts.indexOf(ext) !== -1) {
+    openPreviewTab(tabId, name || path, false, function(panel) {
+      panel.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:80vh;border:none;border-radius:8px"></iframe>';
+    });
+  } else if (htmlExts.indexOf(ext) !== -1) {
+    openPreviewTab(tabId, name || path, true, function(panel) {
+      panel.innerHTML = '<div class="preview-loading">Loading preview...</div>';
+      fetch(previewUrl).then(function(r) {
+        if (!r.ok) { panel.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load file</div>'; return; }
+        return r.text();
+      }).then(function(html) {
+        if (!html) return;
+        var iframe = document.createElement('iframe');
+        iframe.sandbox = 'allow-scripts';
+        iframe.className = 'preview-iframe';
+        panel.innerHTML = '';
+        panel.appendChild(iframe);
+        iframe.srcdoc = html;
+      }).catch(function(e) {
+        panel.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error loading preview</div>';
+      });
+    });
+  } else if (textExts.indexOf(ext) !== -1 || ext === '') {
+    openPreviewTab(tabId, name || path, false, function(panel) {
+      panel.innerHTML = '<div class="preview-loading">Loading preview...</div>';
+      fetch(previewUrl).then(function(r) {
+        if (!r.ok) { panel.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load file</div>'; return; }
+        return r.text();
+      }).then(function(text) {
+        var lines = text.split('\n');
+        var maxLines = 500;
+        var truncated = lines.length > maxLines;
+        if (truncated) text = lines.slice(0, maxLines).join('\n');
+        var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        panel.innerHTML = '<pre class="preview-code">' + escaped + (truncated ? '\n\n... (showing first ' + maxLines + ' of ' + lines.length + ' lines)' : '') + '</pre>';
+      }).catch(function(e) {
+        panel.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
+      });
+    });
+  } else {
+    openPreviewTab(tabId, name || path, false, function(panel) {
+      panel.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-3)"><p>Preview not available for this file type</p><p style="font-size:.8125rem">.' + escHtml(ext) + ' files can be downloaded instead</p></div>';
+    });
+  }
+}
+
+function previewTemplateSlug(slug) {
+  var tabId = 'tmpl:' + slug;
+
+  openPreviewTab(tabId, slug, true, function(panel) {
+    var templateUrl = API + '/api/workspace/preview?path=' + encodeURIComponent('skills/frontend-slides/templates/' + slug + '/template.html') + '&token=' + token;
+    panel.innerHTML = '<div class="preview-loading">Loading preview...</div>';
+
+    fetch(templateUrl).then(function(r) {
+      if (!r.ok) { panel.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load template</div>'; return Promise.reject(); }
+      return r.text();
+    }).then(function(html) {
+      var basePath = 'skills/frontend-slides/templates/' + slug + '/';
+      var fetches = [];
+
+      if (html.indexOf('src="deck-stage.js"') !== -1 || html.indexOf("src='deck-stage.js'") !== -1) {
+        var jsUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(basePath + 'deck-stage.js') + '&token=' + token;
+        fetches.push(
+          fetch(jsUrl).then(function(r) { return r.ok ? r.text() : ''; }).then(function(js) {
+            html = html.replace(/<script\s+src=["']deck-stage\.js["']\s*>\s*<\/script>/g, '<script>' + js + '</script>');
+          })
+        );
+      }
+
+      if (html.indexOf('href="styles.css"') !== -1 || html.indexOf("href='styles.css'") !== -1) {
+        var cssUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(basePath + 'styles.css') + '&token=' + token;
+        fetches.push(
+          fetch(cssUrl).then(function(r) { return r.ok ? r.text() : ''; }).then(function(css) {
+            html = html.replace(/<link\s+rel=["']stylesheet["']\s+href=["']styles\.css["']\s*\/?>/g, '<style>' + css + '</style>');
+          })
+        );
+      }
+
+      return Promise.all(fetches).then(function() { return html; });
+    }).then(function(html) {
+      if (!html) return;
+      var iframe = document.createElement('iframe');
+      iframe.sandbox = 'allow-scripts';
+      iframe.className = 'preview-iframe';
+      panel.innerHTML = '';
+      panel.appendChild(iframe);
+      iframe.srcdoc = html;
+    }).catch(function(e) {
+      if (panel.querySelector('.preview-iframe')) return;
+      panel.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error loading preview</div>';
+    });
+  });
+}
+
+var _previewTabs = {};
+var _previewTabOrder = [];
+var _previewActiveTabId = null;
+
+function openPreviewTab(tabId, title, isWide, renderFn) {
   var modal = document.getElementById('previewModal');
-  var title = document.getElementById('previewTitle');
+  var tabsBar = document.getElementById('previewTabs');
   var body = document.getElementById('previewBody');
 
-  title.textContent = name || path;
-
-  if (imageExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<img src="' + previewUrl + '" style="max-width:100%;max-height:80vh;border-radius:8px;display:block" alt="' + escHtml(name) + '">';
-  } else if (videoExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<video src="' + previewUrl + '" controls style="max-width:100%;max-height:80vh;border-radius:8px;display:block"></video>';
-  } else if (audioExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<div style="padding:2rem;text-align:center"><div style="font-size:3rem;margin-bottom:1rem">&#9835;</div><audio src="' + previewUrl + '" controls style="width:100%"></audio></div>';
-  } else if (pdfExts.indexOf(ext) !== -1) {
-    body.innerHTML = '<iframe src="' + previewUrl + '" style="width:100%;height:80vh;border:none;border-radius:8px"></iframe>';
-  } else if (htmlExts.indexOf(ext) !== -1) {
-    fetchHtmlPreview(previewUrl, body);
-  } else if (textExts.indexOf(ext) !== -1 || ext === '') {
-    fetchTextPreview(previewUrl, name);
-  } else {
-    body.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-3)"><p>Preview not available for this file type</p><p style="font-size:.8125rem">.' + escHtml(ext) + ' files can be downloaded instead</p></div>';
+  if (_previewTabs[tabId]) {
+    switchPreviewTab(tabId);
+    return;
   }
 
+  var panel = document.createElement('div');
+  panel.className = 'preview-panel';
+  panel.id = 'previewPanel_' + tabId.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  _previewTabs[tabId] = { title: title, isWide: isWide, panel: panel, loaded: false };
+  _previewTabOrder.push(tabId);
+
+  var tabEl = document.createElement('button');
+  tabEl.className = 'preview-tab';
+  tabEl.title = title;
+  tabEl.onclick = function() { switchPreviewTab(tabId); };
+  tabEl.innerHTML = '<span class="preview-tab-label">' + escHtml(title) + '</span>' +
+    '<span class="preview-tab-close" onclick="event.stopPropagation();closePreviewTab(\'' + tabId + '\')" title="Close tab">' +
+      '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+    '</span>';
+  _previewTabs[tabId].tabEl = tabEl;
+  tabsBar.appendChild(tabEl);
+
+  body.appendChild(panel);
+
+  switchPreviewTab(tabId);
+
+  if (renderFn) {
+    renderFn(panel);
+    _previewTabs[tabId].loaded = true;
+  }
+}
+
+function switchPreviewTab(tabId) {
+  var info = _previewTabs[tabId];
+  if (!info) return;
+
+  var modal = document.getElementById('previewModal');
+  var content = modal.querySelector('.preview-content');
+
+  if (_previewActiveTabId && _previewTabs[_previewActiveTabId]) {
+    _previewTabs[_previewActiveTabId].panel.style.display = 'none';
+    _previewTabs[_previewActiveTabId].tabEl.classList.remove('active');
+  }
+
+  info.panel.style.display = '';
+  info.tabEl.classList.add('active');
+
+  if (info.isWide) {
+    content.classList.add('preview-wide');
+  } else {
+    content.classList.remove('preview-wide');
+  }
+
+  _previewActiveTabId = tabId;
   modal.classList.add('show');
 }
 
-async function fetchTextPreview(url, name) {
-  var body = document.getElementById('previewBody');
-  try {
-    var r = await fetch(url);
-    if (!r.ok) {
-      body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load file</div>';
-      return;
-    }
-    var text = await r.text();
-    var lines = text.split('\n');
-    var maxLines = 500;
-    var truncated = lines.length > maxLines;
-    if (truncated) {
-      text = lines.slice(0, maxLines).join('\n');
-    }
-    var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    body.innerHTML = '<pre class="preview-code">' + escaped + (truncated ? '\n\n... (showing first ' + maxLines + ' of ' + lines.length + ' lines)' : '') + '</pre>';
-  } catch(e) {
-    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
-  }
-}
+function closePreviewTab(tabId) {
+  var info = _previewTabs[tabId];
+  if (!info) return;
 
-async function fetchHtmlPreview(url, body) {
-  try {
-    var r = await fetch(url);
-    if (!r.ok) {
-      body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load file</div>';
-      return;
+  var wasActive = _previewActiveTabId === tabId;
+
+  info.tabEl.remove();
+  info.panel.remove();
+  delete _previewTabs[tabId];
+  _previewTabOrder = _previewTabOrder.filter(function(id) { return id !== tabId; });
+
+  if (wasActive) {
+    if (_previewTabOrder.length > 0) {
+      switchPreviewTab(_previewTabOrder[_previewTabOrder.length - 1]);
+    } else {
+      closePreview();
     }
-    var html = await r.text();
-    var iframe = document.createElement('iframe');
-    iframe.sandbox = 'allow-scripts';
-    iframe.className = 'preview-iframe';
-    iframe.srcdoc = html;
-    body.innerHTML = '';
-    body.appendChild(iframe);
-    var content = document.querySelector('.preview-content');
-    if (content) content.classList.add('preview-wide');
-  } catch(e) {
-    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
   }
 }
 
 function closePreview() {
-  var content = document.querySelector('.preview-content');
-  if (content) content.classList.remove('preview-wide');
-  document.getElementById('previewModal').classList.remove('show');
-}
-
-function previewTemplateSlug(slug) {
-  var templatePath = 'skills/frontend-slides/templates/' + slug + '/template.html';
-  var templateUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(templatePath) + '&token=' + token;
-
   var modal = document.getElementById('previewModal');
-  var title = document.getElementById('previewTitle');
-  var body = document.getElementById('previewBody');
   var content = modal.querySelector('.preview-content');
-
-  title.textContent = 'Template: ' + slug;
-  content.classList.add('preview-wide');
-
-  body.innerHTML = '<div class="preview-loading">Loading preview...</div>';
-
-  fetch(templateUrl).then(function(r) {
-    if (!r.ok) { body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load template</div>'; return Promise.reject(); }
-    return r.text();
-  }).then(function(html) {
-    var basePath = 'skills/frontend-slides/templates/' + slug + '/';
-    var fetches = [];
-
-    if (html.indexOf('src="deck-stage.js"') !== -1 || html.indexOf("src='deck-stage.js'") !== -1) {
-      var jsUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(basePath + 'deck-stage.js') + '&token=' + token;
-      fetches.push(
-        fetch(jsUrl).then(function(r) { return r.ok ? r.text() : ''; }).then(function(js) {
-          html = html.replace(/<script\s+src=["']deck-stage\.js["']\s*>\s*<\/script>/g, '<script>' + js + '</script>');
-        })
-      );
-    }
-
-    if (html.indexOf('href="styles.css"') !== -1 || html.indexOf("href='styles.css'") !== -1) {
-      var cssUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(basePath + 'styles.css') + '&token=' + token;
-      fetches.push(
-        fetch(cssUrl).then(function(r) { return r.ok ? r.text() : ''; }).then(function(css) {
-          html = html.replace(/<link\s+rel=["']stylesheet["']\s+href=["']styles\.css["']\s*\/?>/g, '<style>' + css + '</style>');
-        })
-      );
-    }
-
-    return Promise.all(fetches).then(function() { return html; });
-  }).then(function(html) {
-    if (!html) return;
-    var iframe = document.createElement('iframe');
-    iframe.sandbox = 'allow-scripts';
-    iframe.className = 'preview-iframe';
-    body.innerHTML = '';
-    body.appendChild(iframe);
-    iframe.srcdoc = html;
-  }).catch(function(e) {
-    if (body.querySelector('.preview-iframe')) return;
-    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error loading preview</div>';
-  });
-
-  modal.classList.add('show');
+  content.classList.remove('preview-wide');
+  modal.classList.remove('show');
 }
 
 function downloadFile(path) {

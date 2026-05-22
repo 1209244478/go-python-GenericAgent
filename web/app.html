@@ -96,8 +96,11 @@
       <div class="chat-input-area">
         <div class="input-wrapper">
           <textarea id="chatInput" placeholder="Describe your task..." rows="1" onkeydown="handleInputKey(event)"></textarea>
-          <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+          <button class="stop-btn" id="stopBtn" onclick="stopMessage()" title="Stop generating" style="display:none">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
           </button>
         </div>
       </div>
@@ -135,7 +138,7 @@
 <div id="previewModal" class="preview-modal" onclick="if(event.target===this)closePreview()">
   <div class="preview-content">
     <div class="preview-header">
-      <h3 id="previewTitle">Preview</h3>
+      <div class="preview-tabs" id="previewTabs"></div>
       <button class="preview-close" onclick="closePreview()">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>

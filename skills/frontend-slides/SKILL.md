@@ -38,7 +38,12 @@ That's it. One call → finished HTML file. No reading templates, no file_write,
 ```interactive
 {"type":"choice","id":"template_slug","question":"请选择演示文稿模板风格","options":["🎮 8-Bit Orbit — 像素霓虹赛博朋克风（深色）","💼 Blue Professional — 简约商务蓝调（专业正式）","..."],"preview_slugs":["8-bit-orbit","blue-professional","..."]}
 ```
-3. Wait for user selection, then use the chosen slug in `generate` action
+3. **Wait** for user to select a template
+4. **CRITICAL — MUST ask for content BEFORE generating**: After the user picks a template, use an input card to ask for the presentation topic/content:
+```interactive
+{"type":"input","id":"ppt_topic","question":"请告诉你想要制作的 PPT 主题/内容","placeholder":"例如：GPT-5 技术架构介绍、Q4 销售数据汇报、新产品发布会..."}
+```
+5. Based on the user's topic, construct the slides array with appropriate content, then call `generate` action
 
 **Template categories** (for match_templates hints, NOT for auto-selection):
 - **Business/Tech**: `blue-professional`, `signal`, `cartesian`, `studio`
