@@ -653,8 +653,8 @@ function closePreview() {
 }
 
 function previewTemplateSlug(slug) {
-  var path = 'skills/frontend-slides/templates/' + slug + '/template.html';
-  var previewUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(path) + '&token=' + token;
+  var templatePath = 'skills/frontend-slides/templates/' + slug + '/template.html';
+  var templateUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(templatePath) + '&token=' + token;
 
   var modal = document.getElementById('previewModal');
   var title = document.getElementById('previewTitle');
@@ -666,9 +666,32 @@ function previewTemplateSlug(slug) {
 
   body.innerHTML = '<div class="preview-loading">Loading preview...</div>';
 
-  fetch(previewUrl).then(function(r) {
-    if (!r.ok) { body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load template</div>'; return; }
+  fetch(templateUrl).then(function(r) {
+    if (!r.ok) { body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Failed to load template</div>'; return Promise.reject(); }
     return r.text();
+  }).then(function(html) {
+    var basePath = 'skills/frontend-slides/templates/' + slug + '/';
+    var fetches = [];
+
+    if (html.indexOf('src="deck-stage.js"') !== -1 || html.indexOf("src='deck-stage.js'") !== -1) {
+      var jsUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(basePath + 'deck-stage.js') + '&token=' + token;
+      fetches.push(
+        fetch(jsUrl).then(function(r) { return r.ok ? r.text() : ''; }).then(function(js) {
+          html = html.replace(/<script\s+src=["']deck-stage\.js["']\s*>\s*<\/script>/g, '<script>' + js + '</script>');
+        })
+      );
+    }
+
+    if (html.indexOf('href="styles.css"') !== -1 || html.indexOf("href='styles.css'") !== -1) {
+      var cssUrl = API + '/api/workspace/preview?path=' + encodeURIComponent(basePath + 'styles.css') + '&token=' + token;
+      fetches.push(
+        fetch(cssUrl).then(function(r) { return r.ok ? r.text() : ''; }).then(function(css) {
+          html = html.replace(/<link\s+rel=["']stylesheet["']\s+href=["']styles\.css["']\s*\/?>/g, '<style>' + css + '</style>');
+        })
+      );
+    }
+
+    return Promise.all(fetches).then(function() { return html; });
   }).then(function(html) {
     if (!html) return;
     var iframe = document.createElement('iframe');
@@ -678,7 +701,8 @@ function previewTemplateSlug(slug) {
     body.appendChild(iframe);
     iframe.srcdoc = html;
   }).catch(function(e) {
-    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error: ' + escHtml(e.message) + '</div>';
+    if (body.querySelector('.preview-iframe')) return;
+    body.innerHTML = '<div style="padding:2rem;color:var(--danger)">Error loading preview</div>';
   });
 
   modal.classList.add('show');
