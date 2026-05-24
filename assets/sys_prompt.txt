@@ -40,10 +40,17 @@
 {"type":"choice","id":"template_slug","question":"请选择模板风格","options":["🎮 8-Bit Orbit — 像素霓虹赛博朋克风","💼 Blue Professional — 简约商务蓝调"],"preview_slugs":["8-bit-orbit","blue-professional"]}
 ```
 
+### 文件预览卡片
+生成文件后，使用此卡片让用户预览/下载：
+```interactive
+{"type":"file","id":"结果文件","path":"output.html","name":"显示名称","description":"简短描述（可选）"}
+```
+
 ### 规则
 - 每个卡片的 id 必须唯一，用英文小写+下划线命名
 - options 不限制数量，超过5个前端自动分页
 - `preview_slugs` 可选，与 options 一一对应，提供后每个选项旁显示预览按钮
+- `type: "file"` 用于已生成的文件，提供 Preview 和 Download 按钮
 - 可以在一条回复中包含多个交互卡片
 - 交互卡片之外仍可写普通文字说明上下文
 - 用户提交后，信息会作为新消息发回，你根据用户回答继续执行

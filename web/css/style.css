@@ -489,10 +489,45 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
   font-weight:600;color:var(--accent);font-size:.75rem;text-transform:uppercase;letter-spacing:.03em;
   margin-right:.375rem;
 }
+.icard-file-row{
+  display:flex;align-items:center;gap:.75rem;
+}
+.icard-file-icon{
+  width:40px;height:40px;border-radius:8px;background:var(--accent-dim);
+  color:var(--accent);display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.icard-file-info{flex:1;min-width:0}
+.icard-file-name{
+  font-size:.875rem;font-weight:500;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.icard-file-desc{
+  font-size:.75rem;color:var(--text-3);margin-top:.125rem;
+}
+.icard-file-actions{
+  display:flex;gap:.375rem;flex-shrink:0;
+}
+.icard-file-btn{
+  display:flex;align-items:center;gap:.375rem;
+  padding:.4rem .75rem;font-size:.75rem;font-weight:500;font-family:inherit;
+  border-radius:var(--radius);border:1px solid var(--border);
+  cursor:pointer;transition:all .15s ease;white-space:nowrap;
+}
+.icard-file-preview{
+  background:var(--surface);color:var(--accent);border-color:var(--accent);
+}
+.icard-file-preview:hover{background:var(--accent);color:#fff}
+.icard-file-download{
+  background:var(--surface);color:var(--text-2);
+}
+.icard-file-download:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
 
 @media(max-width:768px){
   .icard-input-row{flex-direction:column}
   .icard-btn{width:100%;text-align:center}
+  .icard-file-row{flex-wrap:wrap}
+  .icard-file-actions{width:100%;justify-content:flex-end}
   .preview-modal{padding:.5rem}
   .preview-content{max-height:95vh;border-radius:var(--radius-lg)}
   .preview-content.preview-wide{width:96vw;max-width:96vw}

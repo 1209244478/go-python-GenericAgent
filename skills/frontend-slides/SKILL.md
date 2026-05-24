@@ -44,6 +44,10 @@ That's it. One call → finished HTML file. No reading templates, no file_write,
 {"type":"input","id":"ppt_topic","question":"请告诉你想要制作的 PPT 主题/内容","placeholder":"例如：GPT-5 技术架构介绍、Q4 销售数据汇报、新产品发布会..."}
 ```
 5. Based on the user's topic, construct the slides array with appropriate content, then call `generate` action
+6. **After generating**, output a file preview card so the user can preview and download the result:
+```interactive
+{"type":"file","id":"ppt_result","path":"output.html","name":"GPT-5 技术架构介绍","description":"Presentation generated with blue-professional template"}
+```
 
 **Template categories** (for match_templates hints, NOT for auto-selection):
 - **Business/Tech**: `blue-professional`, `signal`, `cartesian`, `studio`

@@ -41,10 +41,17 @@ When you need to collect info or let the user choose, use the following format. 
 {"type":"choice","id":"template_slug","question":"Choose a style","options":["🎮 8-Bit Orbit — Pixel neon cyberpunk","💼 Blue Professional — Clean business blue"],"preview_slugs":["8-bit-orbit","blue-professional"]}
 ```
 
+### File preview card
+After generating a file, use this card for preview/download:
+```interactive
+{"type":"file","id":"result_file","path":"output.html","name":"Display Name","description":"Short description (optional)"}
+```
+
 ### Rules
 - Each card's id must be unique, use lowercase_underscore naming
 - No limit on options; frontend auto-paginates at 5+ per page
 - `preview_slugs` is optional, 1:1 with options; when provided, a preview button appears next to each option
+- `type: "file"` for generated files, provides Preview and Download buttons
 - Multiple interactive cards per reply are supported
 - You can still write explanatory text alongside interactive cards
 - After user submits, the info is sent back as a new message; continue based on their answer
