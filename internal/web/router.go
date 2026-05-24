@@ -36,6 +36,7 @@ func SetupRouter(h *Handler) *gin.Engine {
 			protected.GET("/workspace/file", h.ReadFile)
 			protected.GET("/workspace/preview", h.PreviewFile)
 			protected.POST("/workspace/upload", h.UploadFile)
+			protected.POST("/workspace/save", h.SaveFile)
 			protected.GET("/workspace/download", h.DownloadFile)
 			protected.DELETE("/workspace/file", h.DeleteFile)
 

@@ -590,6 +590,41 @@ func (h *Handler) UploadFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "uploaded", "path": relPath})
 }
 
+func (h *Handler) SaveFile(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path and content required"})
+		return
+	}
+	if req.Path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path required"})
+		return
+	}
+
+	// Do not allow saving to skill templates
+	if strings.HasPrefix(req.Path, "skills/") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot save to skill templates"})
+		return
+	}
+
+	fullPath, err := h.wsMgr.ResolvePath(userID, req.Path)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := os.WriteFile(fullPath, []byte(req.Content), 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "write failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "saved", "path": req.Path})
+}
+
 func (h *Handler) DownloadFile(c *gin.Context) {
 	userID := c.GetInt64("user_id")
 	path := c.Query("path")
