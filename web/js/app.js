@@ -636,7 +636,11 @@ async function handleUpload(input) {
 }
 
 function previewFile(path, name) {
-  var ext = (name || '').split('.').pop().toLowerCase();
+  // Determine extension from path (has the actual filename), fallback to name
+  var ext = (path || '').split('.').pop().toLowerCase();
+  if ((path || '').indexOf('.') === -1) {
+    ext = (name || '').split('.').pop().toLowerCase();
+  }
   var imageExts = ['png','jpg','jpeg','gif','webp','bmp','ico','svg'];
   var textExts = ['txt','md','json','yaml','yml','toml','ini','cfg','conf','env','csv','log','py','go','js','ts','tsx','jsx','vue','svelte','css','scss','less','sh','bash','zsh','java','c','cpp','h','hpp','rs','rb','php','sql','xml'];
   var videoExts = ['mp4'];

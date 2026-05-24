@@ -33,6 +33,7 @@ server.json
 
 # Deploy scripts with credentials
 deploy_*.py
+deploy.py
 
 # Go build artifacts
 server
