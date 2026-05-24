@@ -602,10 +602,10 @@ details .details-content{margin-top:.375rem;color:var(--text-3);line-height:1.6}
 }
 .preview-close:hover{background:var(--danger-dim);color:var(--danger)}
 .preview-body{
-  overflow:auto;flex:1;min-height:0;
+  padding:1rem;overflow:auto;flex:1;min-height:0;
 }
-.preview-panel{display:none;flex:1;min-height:0;overflow:auto}
-.preview-panel:not([style*="display: none"]){display:flex;flex-direction:column}
+.preview-panel{display:none}
+.preview-panel.active{display:flex;flex-direction:column;flex:1;min-height:0}
 .preview-code{
   font-family:var(--mono);font-size:.8125rem;line-height:1.6;
   color:var(--text-2);white-space:pre-wrap;word-break:break-all;

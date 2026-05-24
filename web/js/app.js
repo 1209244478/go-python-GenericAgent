@@ -803,11 +803,11 @@ function switchPreviewTab(tabId) {
   var content = modal.querySelector('.preview-content');
 
   if (_previewActiveTabId && _previewTabs[_previewActiveTabId]) {
-    _previewTabs[_previewActiveTabId].panel.style.display = 'none';
+    _previewTabs[_previewActiveTabId].panel.classList.remove('active');
     _previewTabs[_previewActiveTabId].tabEl.classList.remove('active');
   }
 
-  info.panel.style.display = '';
+  info.panel.classList.add('active');
   info.tabEl.classList.add('active');
 
   if (info.isWide) {
