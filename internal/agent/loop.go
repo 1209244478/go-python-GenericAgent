@@ -18,11 +18,13 @@ type StepOutcome struct {
 type ToolHandler func(toolName string, args map[string]any, response *llm.Response, index int, toolNum int) *StepOutcome
 
 type DisplayItem struct {
-	Turn    int
-	Content string
-	Done    bool
-	Source  string
-	Outputs []string
+	Turn       int
+	Content    string
+	Done       bool
+	Source     string
+	Outputs    []string
+	ToolCalls  []llm.ToolCall
+	ToolCallID string
 }
 
 type Agent struct {
@@ -51,7 +53,7 @@ func New(client *llm.Client, systemPrompt string, toolsSchema []llm.ToolSchema) 
 	}
 }
 
-func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
+func (a *Agent) Run(userInput string, source string, history []llm.Message) <-chan DisplayItem {
 	ch := make(chan DisplayItem, 128)
 	go func() {
 		defer close(ch)
@@ -68,8 +70,14 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 
 		messages := []llm.Message{
 			{Role: "system", Content: a.SystemPrompt},
-			{Role: "user", Content: userInput},
 		}
+		// Append history messages (skip system prompt from history)
+		for _, m := range history {
+			if m.Role != "system" {
+				messages = append(messages, m)
+			}
+		}
+		messages = append(messages, llm.Message{Role: "user", Content: userInput})
 
 		var exitReason map[string]any
 		turn := 0
@@ -147,9 +155,12 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 			var toolResults []llm.ToolResult
 			var nextPrompts []string
 
+			// Send assistant message with tool_calls for history
+			ch <- DisplayItem{Turn: turn, Content: fullContent, Source: "assistant", ToolCalls: response.ToolCalls}
+
 			for ii, tc := range toolCalls {
 				argsJSON, _ := json.MarshalIndent(tc.Args, "", "  ")
-				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("🛠️ %s\n````text\n%s\n````", tc.ToolName, string(argsJSON)), Source: "tool"}
+				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("🛠️ %s\n````text\n%s\n````", tc.ToolName, string(argsJSON)), Source: "tool", ToolCallID: tc.ID}
 
 				outcome := a.Handler(tc.ToolName, tc.Args, response, ii, len(toolCalls))
 
@@ -168,6 +179,8 @@ func (a *Agent) Run(userInput string, source string) <-chan DisplayItem {
 						ToolUseID: tc.ID,
 						Content:   dataStr,
 					})
+					// Send tool result for history
+					ch <- DisplayItem{Turn: turn, Content: dataStr, Source: "tool_result", ToolCallID: tc.ID}
 				}
 				nextPrompts = append(nextPrompts, outcome.NextPrompt)
 			}

@@ -252,11 +252,17 @@ func (h *Handler) RunAgent(c *gin.Context) {
 	router.AllowedDirs = []string{h.skillDir}
 	a.Handler = router.Dispatch
 
-	ch := a.Run(req.Prompt, "web")
+	ch := a.Run(req.Prompt, "web", chatHistoryToMessages(func() []ChatMessage {
+		if req.SessionID > 0 {
+			return h.loadChatHistorySession(userID, req.SessionID)
+		}
+		return h.loadChatHistory(userID)
+	}()))
 
 	var finalContent string
 	var toolSteps []map[string]any
 	var exitResult string
+	var historyItems []ChatMessage
 
 	for item := range ch {
 		if item.Done {
@@ -269,6 +275,20 @@ func (h *Handler) RunAgent(c *gin.Context) {
 				"content": item.Content,
 			})
 		}
+
+		if item.Source == "assistant" {
+			historyItems = append(historyItems, ChatMessage{
+				Role:      "assistant",
+				Content:   item.Content,
+				ToolCalls: item.ToolCalls,
+			})
+		} else if item.Source == "tool_result" {
+			historyItems = append(historyItems, ChatMessage{
+				Role:       "tool",
+				Content:    item.Content,
+				ToolCallID: item.ToolCallID,
+			})
+		}
 	}
 
 	if finalContent == "" {
@@ -276,11 +296,17 @@ func (h *Handler) RunAgent(c *gin.Context) {
 	}
 
 	if req.SessionID > 0 {
-		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt)
-		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent)
+		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt, nil, "")
+		for _, hi := range historyItems {
+			h.saveChatMessageSession(userID, req.SessionID, hi.Role, hi.Content, hi.ToolCalls, hi.ToolCallID)
+		}
+		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent, nil, "")
 	} else {
-		h.saveChatMessage(userID, "user", req.Prompt)
-		h.saveChatMessage(userID, "agent", finalContent)
+		h.saveChatMessage(userID, "user", req.Prompt, nil, "")
+		for _, hi := range historyItems {
+			h.saveChatMessage(userID, hi.Role, hi.Content, hi.ToolCalls, hi.ToolCallID)
+		}
+		h.saveChatMessage(userID, "agent", finalContent, nil, "")
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -352,10 +378,20 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	ch := a.Run(req.Prompt, "sse")
+	// Load chat history for context
+	var history []llm.Message
+	if req.SessionID > 0 {
+		history = chatHistoryToMessages(h.loadChatHistorySession(userID, req.SessionID))
+	} else {
+		history = chatHistoryToMessages(h.loadChatHistory(userID))
+	}
+
+	ch := a.Run(req.Prompt, "sse", history)
 
 	var finalContent string
 	var toolSteps []string
+	// Collect history items for saving
+	var historyItems []ChatMessage
 
 	for item := range ch {
 		data, _ := json.Marshal(map[string]any{
@@ -381,26 +417,48 @@ func (h *Handler) StreamAgent(c *gin.Context) {
 		} else if item.Source == "tool" && item.Content != "" {
 			toolSteps = append(toolSteps, item.Content)
 		}
+
+		// Collect structured history items
+		if item.Source == "assistant" {
+			historyItems = append(historyItems, ChatMessage{
+				Role:      "assistant",
+				Content:   item.Content,
+				ToolCalls: item.ToolCalls,
+			})
+		} else if item.Source == "tool_result" {
+			historyItems = append(historyItems, ChatMessage{
+				Role:       "tool",
+				Content:    item.Content,
+				ToolCallID: item.ToolCallID,
+			})
+		}
 	}
 
 	if finalContent == "" {
 		finalContent = "Task completed."
 	}
 
-	for _, toolContent := range toolSteps {
+	// Save user message
+	if req.SessionID > 0 {
+		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt, nil, "")
+	} else {
+		h.saveChatMessage(userID, "user", req.Prompt, nil, "")
+	}
+
+	// Save structured history (assistant+tool_calls, tool+tool_call_id)
+	for _, hi := range historyItems {
 		if req.SessionID > 0 {
-			h.saveChatMessageSession(userID, req.SessionID, "tool", toolContent)
+			h.saveChatMessageSession(userID, req.SessionID, hi.Role, hi.Content, hi.ToolCalls, hi.ToolCallID)
 		} else {
-			h.saveChatMessage(userID, "tool", toolContent)
+			h.saveChatMessage(userID, hi.Role, hi.Content, hi.ToolCalls, hi.ToolCallID)
 		}
 	}
 
+	// Save final agent response
 	if req.SessionID > 0 {
-		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt)
-		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent)
+		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent, nil, "")
 	} else {
-		h.saveChatMessage(userID, "user", req.Prompt)
-		h.saveChatMessage(userID, "agent", finalContent)
+		h.saveChatMessage(userID, "agent", finalContent, nil, "")
 	}
 }
 
@@ -462,10 +520,16 @@ func (h *Handler) WebSocketAgent(c *gin.Context) {
 	router.AllowedDirs = []string{h.skillDir}
 	a.Handler = router.Dispatch
 
-	ch := a.Run(req.Prompt, "ws")
+	ch := a.Run(req.Prompt, "ws", chatHistoryToMessages(func() []ChatMessage {
+		if req.SessionID > 0 {
+			return h.loadChatHistorySession(userID, req.SessionID)
+		}
+		return h.loadChatHistory(userID)
+	}()))
 
 	var finalContent string
 	var toolSteps []string
+	var historyItems []ChatMessage
 
 	for item := range ch {
 		if err := conn.WriteJSON(gin.H{
@@ -487,26 +551,44 @@ func (h *Handler) WebSocketAgent(c *gin.Context) {
 		} else if item.Source == "tool" && item.Content != "" {
 			toolSteps = append(toolSteps, item.Content)
 		}
+
+		if item.Source == "assistant" {
+			historyItems = append(historyItems, ChatMessage{
+				Role:      "assistant",
+				Content:   item.Content,
+				ToolCalls: item.ToolCalls,
+			})
+		} else if item.Source == "tool_result" {
+			historyItems = append(historyItems, ChatMessage{
+				Role:       "tool",
+				Content:    item.Content,
+				ToolCallID: item.ToolCallID,
+			})
+		}
 	}
 
 	if finalContent == "" {
 		finalContent = "Task completed."
 	}
 
-	for _, toolContent := range toolSteps {
+	if req.SessionID > 0 {
+		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt, nil, "")
+	} else {
+		h.saveChatMessage(userID, "user", req.Prompt, nil, "")
+	}
+
+	for _, hi := range historyItems {
 		if req.SessionID > 0 {
-			h.saveChatMessageSession(userID, req.SessionID, "tool", toolContent)
+			h.saveChatMessageSession(userID, req.SessionID, hi.Role, hi.Content, hi.ToolCalls, hi.ToolCallID)
 		} else {
-			h.saveChatMessage(userID, "tool", toolContent)
+			h.saveChatMessage(userID, hi.Role, hi.Content, hi.ToolCalls, hi.ToolCallID)
 		}
 	}
 
 	if req.SessionID > 0 {
-		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt)
-		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent)
+		h.saveChatMessageSession(userID, req.SessionID, "agent", finalContent, nil, "")
 	} else {
-		h.saveChatMessage(userID, "user", req.Prompt)
-		h.saveChatMessage(userID, "agent", finalContent)
+		h.saveChatMessage(userID, "agent", finalContent, nil, "")
 	}
 }
 
@@ -1025,9 +1107,11 @@ func parseInt(s string, def int) int {
 }
 
 type ChatMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	Timestamp  string           `json:"timestamp"`
+	ToolCalls  []llm.ToolCall   `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 func (h *Handler) chatHistoryPath(userID int64) string {
@@ -1066,12 +1150,14 @@ func (h *Handler) loadChatHistorySession(userID int64, sessionID int64) []ChatMe
 	return messages
 }
 
-func (h *Handler) saveChatMessage(userID int64, role string, content string) {
+func (h *Handler) saveChatMessage(userID int64, role string, content string, toolCalls []llm.ToolCall, toolCallID string) {
 	messages := h.loadChatHistory(userID)
 	messages = append(messages, ChatMessage{
-		Role:      role,
-		Content:   content,
-		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+		Role:       role,
+		Content:    content,
+		Timestamp:  time.Now().Format("2006-01-02 15:04:05"),
+		ToolCalls:  toolCalls,
+		ToolCallID: toolCallID,
 	})
 	const maxMessages = 200
 	if len(messages) > maxMessages {
@@ -1084,12 +1170,14 @@ func (h *Handler) saveChatMessage(userID int64, role string, content string) {
 	os.WriteFile(h.chatHistoryPath(userID), data, 0644)
 }
 
-func (h *Handler) saveChatMessageSession(userID int64, sessionID int64, role string, content string) {
+func (h *Handler) saveChatMessageSession(userID int64, sessionID int64, role string, content string, toolCalls []llm.ToolCall, toolCallID string) {
 	messages := h.loadChatHistorySession(userID, sessionID)
 	messages = append(messages, ChatMessage{
-		Role:      role,
-		Content:   content,
-		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+		Role:       role,
+		Content:    content,
+		Timestamp:  time.Now().Format("2006-01-02 15:04:05"),
+		ToolCalls:  toolCalls,
+		ToolCallID: toolCallID,
 	})
 	const maxMessages = 200
 	if len(messages) > maxMessages {
@@ -1100,6 +1188,21 @@ func (h *Handler) saveChatMessageSession(userID int64, sessionID int64, role str
 		return
 	}
 	os.WriteFile(h.chatHistoryPathSession(userID, sessionID), data, 0644)
+}
+
+// chatHistoryToMessages converts stored ChatMessage history to llm.Message format for agent context
+func chatHistoryToMessages(history []ChatMessage) []llm.Message {
+	var messages []llm.Message
+	for _, m := range history {
+		msg := llm.Message{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		}
+		messages = append(messages, msg)
+	}
+	return messages
 }
 
 func (h *Handler) GetChatHistory(c *gin.Context) {
