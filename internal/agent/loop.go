@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -35,11 +36,21 @@ type Agent struct {
 	SystemPrompt string
 	ToolsSchema  []llm.ToolSchema
 
+	// 长任务能力
+	ContextMgr   *ContextManager
+	Goal         string // 目标追踪
+	PlanMode     bool   // 计划模式
+	TaskID       string // 关联的 Task ID
+	Ctx          context.Context
+
 	mu           sync.Mutex
 	IsRunning    bool
 	StopSignal   bool
 	CurrentTurn  int
 	Working      map[string]any
+
+	// 计划审批通道(由 Runtime 注入)
+	PlanApprovalCh chan bool
 }
 
 func New(client *llm.Client, systemPrompt string, toolsSchema []llm.ToolSchema) *Agent {
@@ -50,6 +61,7 @@ func New(client *llm.Client, systemPrompt string, toolsSchema []llm.ToolSchema) 
 		MaxTurns:     80,
 		Verbose:      true,
 		Working:      make(map[string]any),
+		ContextMgr:   NewContextManager(client),
 	}
 }
 
@@ -84,133 +96,163 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 		var fullResponseText string
 
 		for turn < a.MaxTurns {
-			a.mu.Lock()
-			stopped := a.StopSignal
-			a.mu.Unlock()
-			if stopped {
+		a.mu.Lock()
+		stopped := a.StopSignal
+		a.mu.Unlock()
+		if stopped {
+			break
+		}
+
+		// 检查 context 取消
+		if a.Ctx != nil {
+			select {
+			case <-a.Ctx.Done():
+				exitReason = map[string]any{"result": "ABORTED", "data": "context cancelled"}
+			default:
+			}
+			if exitReason != nil {
 				break
 			}
+		}
 
-			turn++
-			a.CurrentTurn = turn
+		turn++
+		a.CurrentTurn = turn
 
-			var response *llm.Response
-			streamCh, err := a.Client.ChatStream(llm.ChatParams{
-				Messages:   messages,
-				Tools:      a.ToolsSchema,
-				MaxTokens:  a.Client.MaxTokens,
-				Temperature: a.Client.Temperature,
-			})
-			if err != nil {
-				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("Error: %v", err), Source: "error"}
-				break
-			}
-
-			var fullContent string
-			var collectedToolCalls []llm.ToolCall
-			for chunk := range streamCh {
-				if chunk.Error != nil {
-					ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("Error: %v", chunk.Error), Source: "error"}
-					break
-				}
-				if chunk.Text != "" {
-					fullContent += chunk.Text
-					if len(chunk.ToolCalls) == 0 {
-						ch <- DisplayItem{Turn: turn, Content: chunk.Text, Source: "final"}
-					}
-				}
-				if len(chunk.ToolCalls) > 0 {
-					collectedToolCalls = append(collectedToolCalls, chunk.ToolCalls...)
-				}
-				if chunk.Done {
-					break
-				}
-			}
-
-			fullResponseText += fullContent
-
-			response = &llm.Response{
-				Content:   fullContent,
-				ToolCalls: collectedToolCalls,
-			}
-
-			var toolCalls []toolCallInfo
-			if len(response.ToolCalls) == 0 {
-				if fullContent == "" {
-					ch <- DisplayItem{Turn: turn, Content: "", Source: "final"}
-				}
-				exitReason = map[string]any{"result": "CURRENT_TASK_DONE", "data": fullContent}
-				break
+		// 上下文压缩检查
+		if a.ContextMgr != nil && a.ContextMgr.ShouldCompact(messages) {
+			ch <- DisplayItem{Turn: turn, Content: "📦 上下文已超过阈值，正在压缩...", Source: "compact"}
+			newMsgs, err := a.ContextMgr.Compact(messages)
+			if err == nil {
+				messages = newMsgs
+				ch <- DisplayItem{Turn: turn, Content: "✅ 上下文压缩完成", Source: "compact"}
 			} else {
-				for _, tc := range response.ToolCalls {
-					args := parseJSON(tc.Arguments)
-					toolCalls = append(toolCalls, toolCallInfo{
+				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("⚠️ 压缩失败: %v，降级为硬截断", err), Source: "compact"}
+			}
+		}
+
+		// 目标追踪: 每5轮注入目标提醒
+		if a.Goal != "" && turn > 1 && turn%5 == 0 {
+			reminder := fmt.Sprintf("<goal_reminder>当前目标: %s。请确保所有操作都服务于该目标。</goal_reminder>", a.Goal)
+			messages = append(messages, llm.Message{Role: "user", Content: reminder})
+		}
+
+		var response *llm.Response
+		streamCh, err := a.Client.ChatStream(llm.ChatParams{
+			Messages:    messages,
+			Tools:       a.ToolsSchema,
+			MaxTokens:   a.Client.MaxTokens,
+			Temperature: a.Client.Temperature,
+		})
+		if err != nil {
+			ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("Error: %v", err), Source: "error"}
+			break
+		}
+
+		var fullContent string
+		var collectedToolCalls []llm.ToolCall
+		for chunk := range streamCh {
+			if chunk.Error != nil {
+				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("Error: %v", chunk.Error), Source: "error"}
+				break
+			}
+			if chunk.Text != "" {
+				fullContent += chunk.Text
+				if len(chunk.ToolCalls) == 0 {
+					ch <- DisplayItem{Turn: turn, Content: chunk.Text, Source: "final"}
+				}
+			}
+			if len(chunk.ToolCalls) > 0 {
+				collectedToolCalls = append(collectedToolCalls, chunk.ToolCalls...)
+			}
+			if chunk.Done {
+				break
+			}
+		}
+
+		fullResponseText += fullContent
+
+		response = &llm.Response{
+			Content:   fullContent,
+			ToolCalls: collectedToolCalls,
+		}
+
+		var toolCalls []toolCallInfo
+		if len(response.ToolCalls) == 0 {
+			if fullContent == "" {
+				ch <- DisplayItem{Turn: turn, Content: "", Source: "final"}
+			}
+			exitReason = map[string]any{"result": "CURRENT_TASK_DONE", "data": fullContent}
+			break
+		} else {
+			for _, tc := range response.ToolCalls {
+				args := parseJSON(tc.Arguments)
+				toolCalls = append(toolCalls, toolCallInfo{
 					ToolName: tc.Name,
 					Args:     args,
 					ID:       tc.ID,
 				})
-				}
 			}
+		}
 
-			var toolResults []llm.ToolResult
-			var nextPrompts []string
+		var toolResults []llm.ToolResult
+		var nextPrompts []string
 
-			// Send assistant message with tool_calls for history
-			ch <- DisplayItem{Turn: turn, Content: fullContent, Source: "assistant", ToolCalls: response.ToolCalls}
+		// Send assistant message with tool_calls for history
+		ch <- DisplayItem{Turn: turn, Content: fullContent, Source: "assistant", ToolCalls: response.ToolCalls}
 
-			for ii, tc := range toolCalls {
-				argsJSON, _ := json.MarshalIndent(tc.Args, "", "  ")
-				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("🛠️ %s\n````text\n%s\n````", tc.ToolName, string(argsJSON)), Source: "tool", ToolCallID: tc.ID}
+		for ii, tc := range toolCalls {
+			argsJSON, _ := json.MarshalIndent(tc.Args, "", "  ")
+			ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("🛠️ %s\n````text\n%s\n````", tc.ToolName, string(argsJSON)), Source: "tool", ToolCallID: tc.ID}
 
-				outcome := a.Handler(tc.ToolName, tc.Args, response, ii, len(toolCalls))
+			outcome := a.Handler(tc.ToolName, tc.Args, response, ii, len(toolCalls))
 
-				if outcome.ShouldExit {
-					exitReason = map[string]any{"result": "EXITED", "data": outcome.Data}
-					break
-				}
-				if outcome.NextPrompt == "" {
-					exitReason = map[string]any{"result": "CURRENT_TASK_DONE", "data": outcome.Data}
-					break
-				}
-
-				if outcome.Data != nil {
-					dataStr := stringify(outcome.Data)
-					toolResults = append(toolResults, llm.ToolResult{
-						ToolUseID: tc.ID,
-						Content:   dataStr,
-					})
-					// Send tool result for history
-					ch <- DisplayItem{Turn: turn, Content: dataStr, Source: "tool_result", ToolCallID: tc.ID}
-				}
-				nextPrompts = append(nextPrompts, outcome.NextPrompt)
+			if outcome.ShouldExit {
+				exitReason = map[string]any{"result": "EXITED", "data": outcome.Data}
+				break
 			}
-
-			if len(nextPrompts) == 0 || exitReason != nil {
+			if outcome.NextPrompt == "" {
+				exitReason = map[string]any{"result": "CURRENT_TASK_DONE", "data": outcome.Data}
 				break
 			}
 
-			assistantMsg := llm.Message{
-				Role:      "assistant",
-				Content:   fullContent,
-				ToolCalls: response.ToolCalls,
+			if outcome.Data != nil {
+				dataStr := stringify(outcome.Data)
+				toolResults = append(toolResults, llm.ToolResult{
+					ToolUseID: tc.ID,
+					Content:   dataStr,
+				})
+				// Send tool result for history
+				ch <- DisplayItem{Turn: turn, Content: dataStr, Source: "tool_result", ToolCallID: tc.ID}
 			}
-			messages = append(messages, assistantMsg)
-
-			for _, tr := range toolResults {
-				toolMsg := llm.Message{
-					Role:       "tool",
-					ToolCallID: tr.ToolUseID,
-					Content:    tr.Content,
-				}
-				messages = append(messages, toolMsg)
-			}
-
-			nextPrompt := strings.Join(nextPrompts, "\n")
-			messages = append(messages, llm.Message{
-				Role:    "user",
-				Content: nextPrompt,
-			})
+			nextPrompts = append(nextPrompts, outcome.NextPrompt)
 		}
+
+		if len(nextPrompts) == 0 || exitReason != nil {
+			break
+		}
+
+		assistantMsg := llm.Message{
+			Role:      "assistant",
+			Content:   fullContent,
+			ToolCalls: response.ToolCalls,
+		}
+		messages = append(messages, assistantMsg)
+
+		for _, tr := range toolResults {
+			toolMsg := llm.Message{
+				Role:       "tool",
+				ToolCallID: tr.ToolUseID,
+				Content:    tr.Content,
+			}
+			messages = append(messages, toolMsg)
+		}
+
+		nextPrompt := strings.Join(nextPrompts, "\n")
+		messages = append(messages, llm.Message{
+			Role:    "user",
+			Content: nextPrompt,
+		})
+	}
 
 		if exitReason == nil {
 			exitReason = map[string]any{"result": "MAX_TURNS_EXCEEDED"}

@@ -39,6 +39,7 @@ deploy.py
 server
 server_linux
 ga-server-linux
+ga-linux
 ga
 ga.exe
 deploy.py

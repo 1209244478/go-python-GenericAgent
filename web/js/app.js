@@ -4,6 +4,7 @@ let user = null;
 let ws = null;
 let isRunning = false;
 let abortController = null;
+let currentTaskId = null;
 let currentSessionId = 0;
 
 try { user = JSON.parse(localStorage.getItem('user') || 'null'); } catch(e) {}
@@ -119,16 +120,42 @@ async function sendMessage() {
   bubble.appendChild(typingEl);
 
   var fullContent = '';
+  currentTaskId = null;
   abortController = new AbortController();
 
   try {
-    var r = await fetch(API + '/api/agent/stream', {
+    // 1. 启动任务
+    var startResp = await fetch(API + '/api/agent/run-task', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token
       },
       body: JSON.stringify({ prompt: text, session_id: currentSessionId }),
+      signal: abortController.signal
+    });
+
+    if (startResp.status === 401) { handleLogout(); return; }
+    if (!startResp.ok) {
+      var errData = await startResp.json();
+      if (typingEl.parentNode) typingEl.remove();
+      bubble.textContent = 'Error: ' + (errData.error || 'start failed');
+      isRunning = false;
+      abortController = null;
+      updateStatus('ready');
+      setRunningUI(false);
+      return;
+    }
+
+    var taskData = await startResp.json();
+    currentTaskId = taskData.task_id;
+
+    // 2. SSE 订阅任务输出
+    var r = await fetch(API + '/api/agent/stream-task/' + currentTaskId, {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + token
+      },
       signal: abortController.signal
     });
 
@@ -168,6 +195,14 @@ async function sendMessage() {
           bubble.appendChild(toolEl);
           var container = document.getElementById('chatMessages');
           container.scrollTop = container.scrollHeight;
+        } else if (d.source === 'compact' && d.content) {
+          // 上下文压缩提示
+          if (typingEl.parentNode) typingEl.remove();
+          var compactEl = document.createElement('div');
+          compactEl.className = 'msg-tool-step';
+          compactEl.style.opacity = '0.7';
+          compactEl.innerHTML = '<small>' + d.content + '</small>';
+          bubble.appendChild(compactEl);
         } else if (d.source === 'error' && d.content) {
           if (typingEl.parentNode) typingEl.remove();
           fullContent += d.content;
@@ -185,6 +220,13 @@ async function sendMessage() {
     }
   } catch (err) {
     if (err.name === 'AbortError') {
+      // 调用 abort-task 接口
+      if (currentTaskId) {
+        fetch(API + '/api/agent/abort-task/' + currentTaskId, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        }).catch(()=>{});
+      }
       if (typingEl.parentNode) typingEl.remove();
       if (!fullContent) {
         bubble.innerHTML = renderMarkdown('_Stopped._');
@@ -199,6 +241,7 @@ async function sendMessage() {
   }
 
   isRunning = false;
+  currentTaskId = null;
   abortController = null;
   updateStatus('ready');
   setRunningUI(false);

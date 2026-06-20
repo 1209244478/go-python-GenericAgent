@@ -96,5 +96,37 @@
       "scheme": {"type": "string", "description": "[match_templates] light/dark/mixed"},
       "file": {"type": "string", "description": "[read_file] File to read from skill directory"}},
     "required": ["skill"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "spawn_subagent",
+    "description": "启动子 agent 并行处理子任务，等待结果返回。适用于复杂任务拆解、独立子任务并行执行",
+    "parameters": {"type": "object", "properties": {
+      "prompt": {"type": "string", "description": "子任务指令，描述清楚子任务的目标和约束"},
+      "timeout": {"type": "integer", "description": "超时秒数，默认300", "default": 300}},
+    "required": ["prompt"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "exit_plan_mode",
+    "description": "计划模式下提交计划等待用户审批。审批通过后才能继续执行",
+    "parameters": {"type": "object", "properties": {
+      "plan": {"type": "string", "description": "计划内容，包含步骤、预期结果、风险评估"}},
+    "required": ["plan"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "set_goal",
+    "description": "设置或更新当前会话的长期目标。系统会定期提醒 agent 围绕目标执行",
+    "parameters": {"type": "object", "properties": {
+      "goal": {"type": "string", "description": "目标描述"}},
+    "required": ["goal"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "update_todo",
+    "description": "更新任务清单，追踪多步骤任务进度。每次完成一步后更新状态",
+    "parameters": {"type": "object", "properties": {
+      "todos": {"type": "array", "items": {"type": "object", "properties": {
+        "content": {"type": "string", "description": "任务内容"},
+        "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "任务状态"}},
+      "required": ["content", "status"]}}}},
+    "required": ["todos"]}}
   }}
 ]

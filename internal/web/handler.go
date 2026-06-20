@@ -18,6 +18,7 @@ import (
 	"github.com/genericagent/ga/internal/config"
 	"github.com/genericagent/ga/internal/llm"
 	"github.com/genericagent/ga/internal/memory"
+	"github.com/genericagent/ga/internal/task"
 	"github.com/genericagent/ga/internal/tool"
 	"github.com/genericagent/ga/internal/workspace"
 	"github.com/gorilla/websocket"
@@ -33,6 +34,7 @@ type Handler struct {
 	skillDir  string
 	upgrader  websocket.Upgrader
 	sessions  map[int64]*Session
+	taskRT    *task.Runtime
 }
 
 type Session struct {
@@ -51,6 +53,52 @@ func NewHandler(
 	rootDir string,
 	skillDir string,
 ) *Handler {
+	// 创建 Task Runtime (先创建 store 和 runtime shell, factory 内引用 runtime 指针)
+	store := task.NewStore(filepath.Join(rootDir, "data"))
+	var taskRT *task.Runtime
+	taskRT = task.NewRuntime(store, func(cfg task.AgentConfig) *agent.Agent {
+		// 加载 LLM 配置
+		loaded, _ := config.Load()
+		var client *llm.Client
+		for _, lc := range loaded.LLMs {
+			client = &llm.Client{
+				APIBase:        lc.APIBase,
+				APIKey:         lc.APIKey,
+				Model:          lc.Model,
+				APIMode:        lc.APIMode,
+				Name:           lc.Name,
+				Stream:         lc.Stream,
+				MaxTokens:      lc.MaxTokens,
+				Temperature:    lc.Temperature,
+				ContextWin:     lc.ContextWin,
+				ConnectTimeout: time.Duration(lc.ConnectTimeout) * time.Second,
+				ReadTimeout:    time.Duration(lc.ReadTimeout) * time.Second,
+				MaxRetries:     lc.MaxRetries,
+			}
+			break
+		}
+		userDir := wsMgr.UserDir(cfg.UserID)
+		memMgr := memory.NewManager(rootDir)
+		sysPrompt := buildSystemPrompt(memMgr, userDir, skillDir)
+		toolsSchema := loadToolsSchema(rootDir)
+		a := agent.New(client, sysPrompt, toolsSchema)
+		a.Verbose = true
+		a.MaxTurns = 80
+		a.Goal = cfg.Goal
+		a.PlanMode = cfg.PlanMode
+		a.TaskID = cfg.TaskID
+		router := tool.NewRouter(userDir)
+		router.SkillDir = skillDir
+		router.AllowedDirs = []string{skillDir}
+		router.TaskRuntime = taskRT
+		router.CurrentTaskID = cfg.TaskID
+		a.Handler = router.Dispatch
+		return a
+	})
+
+	// 恢复未完成任务
+	taskRT.Restore()
+
 	return &Handler{
 		users:    users,
 		codes:    codes,
@@ -63,6 +111,7 @@ func NewHandler(
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 		sessions: make(map[int64]*Session),
+		taskRT:   taskRT,
 	}
 }
 
@@ -1303,4 +1352,164 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// ==================== Task API (长任务能力) ====================
+
+// StartTask 异步启动任务，立即返回 taskId
+// POST /agent/run-task
+func (h *Handler) StartTask(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+
+	var req struct {
+		Prompt    string `json:"prompt" binding:"required"`
+		SessionID int64  `json:"session_id"`
+		Goal      string `json:"goal"`
+		PlanMode  bool   `json:"plan_mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prompt required"})
+		return
+	}
+
+	// 加载历史消息
+	var history []llm.Message
+	if req.SessionID > 0 {
+		history = chatHistoryToMessages(h.loadChatHistorySession(userID, req.SessionID))
+	} else {
+		history = chatHistoryToMessages(h.loadChatHistory(userID))
+	}
+
+	t, err := h.taskRT.Start(task.TaskConfig{
+		Type:      task.TypeMain,
+		UserID:    userID,
+		SessionID: req.SessionID,
+		Prompt:    req.Prompt,
+		Goal:      req.Goal,
+		PlanMode:  req.PlanMode,
+		History:   history,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"task_id": t.State.ID,
+		"status":  t.State.Status,
+	})
+}
+
+// StreamTask SSE 订阅任务输出
+// GET /agent/stream-task/:taskId
+func (h *Handler) StreamTask(c *gin.Context) {
+	taskID := c.Param("taskId")
+	userID := c.GetInt64("user_id")
+
+	// 验证任务属于该用户
+	t, err := h.taskRT.Get(taskID)
+	if err != nil || t.State.UserID != userID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	ch, unsub, err := h.taskRT.Subscribe(taskID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	defer unsub()
+
+	notify := c.Request.Context().Done()
+	flusher, _ := c.Writer.(http.Flusher)
+
+	for {
+		select {
+		case item, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, _ := json.Marshal(item)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case <-notify:
+			return
+		}
+	}
+}
+
+// AbortTask 中断任务
+// POST /agent/abort-task/:taskId
+func (h *Handler) AbortTask(c *gin.Context) {
+	taskID := c.Param("taskId")
+	userID := c.GetInt64("user_id")
+
+	t, err := h.taskRT.Get(taskID)
+	if err != nil || t.State.UserID != userID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+
+	if err := h.taskRT.Abort(taskID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "aborted"})
+}
+
+// ResumeTask 恢复暂停的任务(计划审批)
+// POST /agent/resume-task/:taskId
+func (h *Handler) ResumeTask(c *gin.Context) {
+	taskID := c.Param("taskId")
+	userID := c.GetInt64("user_id")
+
+	t, err := h.taskRT.Get(taskID)
+	if err != nil || t.State.UserID != userID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+
+	var req struct {
+		Approved bool `json:"approved"`
+	}
+	c.ShouldBindJSON(&req)
+
+	if err := h.taskRT.Resume(taskID, req.Approved); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "resumed"})
+}
+
+// ListTasks 列出用户所有任务
+// GET /agent/tasks
+func (h *Handler) ListTasks(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+	states, err := h.taskRT.ListByUser(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tasks": states})
+}
+
+// GetTask 获取任务详情
+// GET /agent/task/:taskId
+func (h *Handler) GetTask(c *gin.Context) {
+	taskID := c.Param("taskId")
+	userID := c.GetInt64("user_id")
+
+	t, err := h.taskRT.Get(taskID)
+	if err != nil || t.State.UserID != userID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"task": t.State})
 }

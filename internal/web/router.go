@@ -29,6 +29,14 @@ func SetupRouter(h *Handler) *gin.Engine {
 			protected.POST("/agent/stream", h.StreamAgent)
 			protected.GET("/agent/ws", h.WebSocketAgent)
 
+			// Task API (长任务能力)
+			protected.POST("/agent/run-task", h.StartTask)
+			protected.GET("/agent/stream-task/:taskId", h.StreamTask)
+			protected.POST("/agent/abort-task/:taskId", h.AbortTask)
+			protected.POST("/agent/resume-task/:taskId", h.ResumeTask)
+			protected.GET("/agent/tasks", h.ListTasks)
+			protected.GET("/agent/task/:taskId", h.GetTask)
+
 			protected.GET("/chat/history", h.GetChatHistory)
 			protected.DELETE("/chat/history", h.ClearChatHistory)
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/genericagent/ga/internal/agent"
 	"github.com/genericagent/ga/internal/llm"
+	"github.com/genericagent/ga/internal/task"
 )
 
 type Router struct {
@@ -24,6 +25,8 @@ type Router struct {
 	SkillDir     string
 	PythonPath   string
 	AllowedDirs  []string
+	TaskRuntime  *task.Runtime // 子任务编排
+	CurrentTaskID string       // 当前任务ID
 }
 
 var blockedCommands = []string{
@@ -299,6 +302,14 @@ func (r *Router) Dispatch(toolName string, args map[string]any, response *llm.Re
 		return r.doUpdateWorkingCheckpoint(args)
 	case "skill_run":
 		return r.doSkillRun(args, response)
+	case "spawn_subagent":
+		return r.doSpawnSubagent(args)
+	case "exit_plan_mode":
+		return r.doExitPlanMode(args)
+	case "set_goal":
+		return r.doSetGoal(args)
+	case "update_todo":
+		return r.doUpdateTodo(args)
 	default:
 		return &agent.StepOutcome{
 			Data:       nil,
@@ -889,6 +900,114 @@ func (r *Router) isCodeBlocked(code string, codeType string) (bool, string) {
 	}
 
 	return false, ""
+}
+
+// ==================== 长任务工具 ====================
+
+// doSpawnSubagent 启动子 agent 处理子任务
+func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
+	prompt := strArg(args, "prompt", "")
+	if prompt == "" {
+		return &agent.StepOutcome{
+			Data:       "[Error] prompt required",
+			NextPrompt: "子任务启动失败: 缺少 prompt 参数",
+		}
+	}
+	timeoutSec := intArg(args, "timeout", 300)
+
+	if r.TaskRuntime == nil {
+		return &agent.StepOutcome{
+			Data:       "[Error] TaskRuntime not configured",
+			NextPrompt: "子任务启动失败: 运行时未配置",
+		}
+	}
+
+	// 启动子任务
+	subTask, err := r.TaskRuntime.Start(task.TaskConfig{
+		Type:     task.TypeSubagent,
+		ParentID: r.CurrentTaskID,
+		Prompt:   prompt,
+	})
+	if err != nil {
+		return &agent.StepOutcome{
+			Data:       fmt.Sprintf("[Error] %v", err),
+			NextPrompt: fmt.Sprintf("子任务启动失败: %v", err),
+		}
+	}
+
+	// 等待子任务完成或超时
+	select {
+	case <-subTask.Wait():
+	case <-time.After(time.Duration(timeoutSec) * time.Second):
+		r.TaskRuntime.Abort(subTask.State.ID)
+		return &agent.StepOutcome{
+			Data:       "[Timeout] subagent exceeded timeout",
+			NextPrompt: fmt.Sprintf("子任务超时(%ds)，已中断", timeoutSec),
+		}
+	}
+
+	// 读取子任务输出
+	result := "子任务已完成"
+	if subTask.State.Status == task.StatusFailed {
+		result = fmt.Sprintf("子任务失败: %s", subTask.State.Error)
+	} else if subTask.State.Status == task.StatusKilled {
+		result = "子任务被中断"
+	}
+
+	return &agent.StepOutcome{
+		Data:       result,
+		NextPrompt: fmt.Sprintf("子任务结果: %s。请基于此结果继续。", result),
+	}
+}
+
+// doExitPlanMode 计划模式: 提交计划等待审批
+func (r *Router) doExitPlanMode(args map[string]any) *agent.StepOutcome {
+	plan := strArg(args, "plan", "")
+	if plan == "" {
+		return &agent.StepOutcome{
+			Data:       "[Error] plan required",
+			NextPrompt: "请提供计划内容",
+		}
+	}
+
+	// TODO: 通过 Runtime 暂停任务并等待审批
+	// 当前简化实现: 直接返回计划，让用户在下一轮确认
+	return &agent.StepOutcome{
+		Data:       plan,
+		NextPrompt: fmt.Sprintf("已提交计划等待审批:\n%s\n\n请等待用户确认后继续执行。", plan),
+	}
+}
+
+// doSetGoal 设置目标
+func (r *Router) doSetGoal(args map[string]any) *agent.StepOutcome {
+	goal := strArg(args, "goal", "")
+	if goal == "" {
+		return &agent.StepOutcome{
+			Data:       "[Error] goal required",
+			NextPrompt: "请提供目标内容",
+		}
+	}
+	return &agent.StepOutcome{
+		Data:       goal,
+		NextPrompt: fmt.Sprintf("目标已设置: %s。后续操作将围绕此目标进行。", goal),
+	}
+}
+
+// doUpdateTodo 更新任务清单
+func (r *Router) doUpdateTodo(args map[string]any) *agent.StepOutcome {
+	todosRaw, ok := args["todos"]
+	if !ok {
+		return &agent.StepOutcome{
+			Data:       "[Error] todos required",
+			NextPrompt: "请提供 todos 数组",
+		}
+	}
+
+	todosJSON, _ := json.Marshal(todosRaw)
+	return &agent.StepOutcome{
+		Data:       string(todosJSON),
+		NextPrompt: fmt.Sprintf("任务清单已更新:\n%s\n\n请继续执行下一项任务。", string(todosJSON)),
+	}
 }
 
 func normalizePythonCode(code string) string {

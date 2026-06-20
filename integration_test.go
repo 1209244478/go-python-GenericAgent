@@ -261,7 +261,7 @@ func setupAgent(t *testing.T, server *httptest.Server, workDir string) (*agent.A
 }
 
 func runAgentCollect(a *agent.Agent, userInput string) []collectedItem {
-	ch := a.Run(userInput, "test")
+	ch := a.Run(userInput, "test", nil)
 	var items []collectedItem
 	for item := range ch {
 		items = append(items, collectedItem{
@@ -526,7 +526,7 @@ func TestIntegration_FrontendHubBroadcast(t *testing.T) {
 	hub.Register(fe1)
 	hub.Register(fe2)
 
-	ch := a.Run("Test hub broadcast", "test")
+	ch := a.Run("Test hub broadcast", "test", nil)
 	for item := range ch {
 		hub.Broadcast(frontend.DisplayItem{
 			Turn:    item.Turn,
@@ -738,7 +738,7 @@ func TestIntegration_Abort(t *testing.T) {
 
 	a, _ := setupAgent(t, server, workDir)
 
-	ch := a.Run("Run a long task", "test")
+	ch := a.Run("Run a long task", "test", nil)
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
