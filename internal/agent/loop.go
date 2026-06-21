@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/genericagent/ga/internal/llm"
 )
@@ -14,6 +15,7 @@ type StepOutcome struct {
 	Data        any
 	NextPrompt  string
 	ShouldExit  bool
+	PlanSubmit  string // 计划模式: 提交计划内容 (非空则触发审批流程)
 }
 
 type ToolHandler func(toolName string, args map[string]any, response *llm.Response, index int, toolNum int) *StepOutcome
@@ -38,10 +40,13 @@ type Agent struct {
 
 	// 长任务能力
 	ContextMgr   *ContextManager
-	Goal         string // 目标追踪
+	Goal         string // 目标追踪 (兼容旧字段)
+	GoalTracker  *GoalTracker // 目标追踪状态机 (新)
 	PlanMode     bool   // 计划模式
 	TaskID       string // 关联的 Task ID
 	Ctx          context.Context
+	CwdOverride  string // 工作目录覆盖 (worktree 隔离)
+	MaxDuration  time.Duration // 整体执行超时 (0=无限), 参考 cc-haha REMOTE_REVIEW_TIMEOUT_MS
 
 	mu           sync.Mutex
 	IsRunning    bool
@@ -51,6 +56,14 @@ type Agent struct {
 
 	// 计划审批通道(由 Runtime 注入)
 	PlanApprovalCh chan bool
+
+	// teammate 通信: 待注入的消息队列
+	injectMu      sync.Mutex
+	injectedMsgs  []string
+	planApproved  chan struct{} // 计划审批通过信号
+
+	// 最终消息历史 (loop 结束后供 Runtime 持久化)
+	finalMessages []llm.Message
 }
 
 func New(client *llm.Client, systemPrompt string, toolsSchema []llm.ToolSchema) *Agent {
@@ -73,6 +86,9 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 		a.IsRunning = true
 		a.StopSignal = false
 		a.mu.Unlock()
+
+		// 整体执行超时计时
+		startTime := time.Now()
 
 		defer func() {
 			a.mu.Lock()
@@ -115,6 +131,14 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 			}
 		}
 
+		// 检查整体执行超时 (MaxDuration)
+		// 参考 cc-haha REMOTE_REVIEW_TIMEOUT_MS = 30min
+		if a.MaxDuration > 0 && time.Since(startTime) > a.MaxDuration {
+			exitReason = map[string]any{"result": "TIMEOUT", "data": fmt.Sprintf("exceeded max duration %v", a.MaxDuration)}
+			ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("⏰ 整体执行超时 (%v)，自动终止", a.MaxDuration), Source: "timeout"}
+			break
+		}
+
 		turn++
 		a.CurrentTurn = turn
 
@@ -130,10 +154,25 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 			}
 		}
 
-		// 目标追踪: 每5轮注入目标提醒
-		if a.Goal != "" && turn > 1 && turn%5 == 0 {
+		// 目标追踪: 使用 GoalTracker 状态机
+		// 参考 cc-haha goalState.ts: active/paused/done/failed 状态机
+		if a.GoalTracker != nil {
+			if shouldRemind, msg := a.GoalTracker.ShouldRemind(turn); shouldRemind {
+				messages = append(messages, llm.Message{Role: "user", Content: msg})
+				a.GoalTracker.MarkReminded(turn)
+			}
+		} else if a.Goal != "" && turn > 1 && turn%5 == 0 {
+			// 兼容旧字段
 			reminder := fmt.Sprintf("<goal_reminder>当前目标: %s。请确保所有操作都服务于该目标。</goal_reminder>", a.Goal)
 			messages = append(messages, llm.Message{Role: "user", Content: reminder})
+		}
+
+		// 消费 teammate 注入的消息
+		if injected := a.drainInjectedMessages(); len(injected) > 0 {
+			for _, msg := range injected {
+				messages = append(messages, llm.Message{Role: "user", Content: msg})
+			}
+			ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("📨 收到 %d 条来自其他 agent 的消息", len(injected)), Source: "teammate"}
 		}
 
 		var response *llm.Response
@@ -206,6 +245,37 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 
 			outcome := a.Handler(tc.ToolName, tc.Args, response, ii, len(toolCalls))
 
+			// 计划模式: 提交计划等待审批
+			// 参考 cc-haha ExitPlanModeTool: 暂停执行 -> 用户审批 -> 继续/终止
+			if outcome.PlanSubmit != "" {
+				ch <- DisplayItem{
+					Turn:    turn,
+					Content: outcome.PlanSubmit,
+					Source:  "plan_submit",
+				}
+
+				// 初始化审批通道 (如果尚未初始化)
+				if a.planApproved == nil {
+					a.planApproved = make(chan struct{}, 1)
+				}
+
+				// 阻塞等待审批
+				approved := a.waitForPlanApproval()
+				if !approved {
+					exitReason = map[string]any{"result": "PLAN_REJECTED", "data": outcome.PlanSubmit}
+					break
+				}
+
+				// 审批通过, 注入批准消息并继续
+				toolResults = append(toolResults, llm.ToolResult{
+					ToolUseID: tc.ID,
+					Content:   "[计划已批准，请继续执行]",
+				})
+				ch <- DisplayItem{Turn: turn, Content: "[计划已批准]", Source: "tool_result", ToolCallID: tc.ID}
+				nextPrompts = append(nextPrompts, "计划已批准，请按照计划继续执行。")
+				continue
+			}
+
 			if outcome.ShouldExit {
 				exitReason = map[string]any{"result": "EXITED", "data": outcome.Data}
 				break
@@ -258,16 +328,68 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 			exitReason = map[string]any{"result": "MAX_TURNS_EXCEEDED"}
 		}
 
+		// 保存最终消息历史 (供 Runtime 持久化和子 agent 恢复)
+		a.mu.Lock()
+		a.finalMessages = messages
+		a.mu.Unlock()
+
 		doneContent := fmt.Sprintf("\n[Done] %v", exitReason["result"])
 		ch <- DisplayItem{Turn: turn, Content: fullResponseText, Done: true, Source: source, Outputs: []string{doneContent}}
 	}()
 	return ch
 }
 
+// GetFinalMessages 获取最终消息历史 (loop 结束后调用)
+func (a *Agent) GetFinalMessages() []llm.Message {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.finalMessages
+}
+
 func (a *Agent) Abort() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.StopSignal = true
+}
+
+// InjectMessage 注入外部消息 (teammate 通信)
+// 消息会在下一轮循环开始前作为 user 消息加入上下文
+func (a *Agent) InjectMessage(content string) {
+	a.injectMu.Lock()
+	defer a.injectMu.Unlock()
+	a.injectedMsgs = append(a.injectedMsgs, content)
+}
+
+// drainInjectedMessages 取出并清空待注入消息
+func (a *Agent) drainInjectedMessages() []string {
+	a.injectMu.Lock()
+	defer a.injectMu.Unlock()
+	if len(a.injectedMsgs) == 0 {
+		return nil
+	}
+	msgs := a.injectedMsgs
+	a.injectedMsgs = nil
+	return msgs
+}
+
+// ApprovePlan 通知 agent 计划已批准, 继续执行
+func (a *Agent) ApprovePlan() {
+	if a.planApproved != nil {
+		select {
+		case a.planApproved <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// waitForPlanApproval 等待计划审批 (阻塞)
+// 在 plan mode 下调用 exit_plan_mode 后触发
+func (a *Agent) waitForPlanApproval() bool {
+	if a.planApproved == nil {
+		return true // 无审批通道, 直接通过
+	}
+	_, ok := <-a.planApproved
+	return ok
 }
 
 func (a *Agent) GetRunning() bool {

@@ -87,11 +87,17 @@ func NewHandler(
 		a.Goal = cfg.Goal
 		a.PlanMode = cfg.PlanMode
 		a.TaskID = cfg.TaskID
+		a.CwdOverride = cfg.CwdOverride
+		a.PlanApprovalCh = make(chan bool, 1)
+		// planApproved channel 在 loop 首次 plan_submit 时初始化
 		router := tool.NewRouter(userDir)
 		router.SkillDir = skillDir
 		router.AllowedDirs = []string{skillDir}
 		router.TaskRuntime = taskRT
 		router.CurrentTaskID = cfg.TaskID
+		if cfg.CwdOverride != "" {
+			router.Cwd = cfg.CwdOverride
+		}
 		a.Handler = router.Dispatch
 		return a
 	})

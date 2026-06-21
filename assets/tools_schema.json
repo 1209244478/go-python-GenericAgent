@@ -99,11 +99,31 @@
   }},
   {"type": "function", "function": {
     "name": "spawn_subagent",
-    "description": "启动子 agent 并行处理子任务，等待结果返回。适用于复杂任务拆解、独立子任务并行执行",
+    "description": "启动子 agent 处理子任务，同步阻塞等待结果返回。支持 worktree 隔离。适用于复杂任务拆解、独立子任务执行",
     "parameters": {"type": "object", "properties": {
       "prompt": {"type": "string", "description": "子任务指令，描述清楚子任务的目标和约束"},
-      "timeout": {"type": "integer", "description": "超时秒数，默认300", "default": 300}},
+      "timeout": {"type": "integer", "description": "超时秒数，默认300", "default": 300},
+      "isolation": {"type": "string", "enum": ["worktree"], "description": "隔离模式。worktree 创建临时 git 工作树，子 agent 在隔离副本中操作"},
+      "cwd": {"type": "string", "description": "子任务工作目录(绝对路径)。与 isolation 互斥"}},
     "required": ["prompt"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "spawn_teammate",
+    "description": "启动异步 teammate agent 在后台运行，非阻塞。通过 send_message 通信。适用于长时间并行协作",
+    "parameters": {"type": "object", "properties": {
+      "prompt": {"type": "string", "description": "teammate 的任务指令"},
+      "name": {"type": "string", "description": "teammate 名称，用于 send_message 寻址(必填)"},
+      "team_name": {"type": "string", "description": "团队名称，同团队的成员可互发消息"},
+      "isolation": {"type": "string", "enum": ["worktree"], "description": "隔离模式"}},
+    "required": ["prompt", "name"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "send_message",
+    "description": "向其他 agent 发送消息。to 为 agent 名称或 'all'(广播同团队)",
+    "parameters": {"type": "object", "properties": {
+      "to": {"type": "string", "description": "接收者 agent 名称，或 'all' 广播同团队"},
+      "content": {"type": "string", "description": "消息内容"}},
+    "required": ["to", "content"]}}
   }},
   {"type": "function", "function": {
     "name": "exit_plan_mode",
@@ -114,10 +134,12 @@
   }},
   {"type": "function", "function": {
     "name": "set_goal",
-    "description": "设置或更新当前会话的长期目标。系统会定期提醒 agent 围绕目标执行",
+    "description": "设置或管理当前会话的长期目标。支持 set/pause/resume/complete/clear 操作。系统会定期提醒 agent 围绕目标执行",
     "parameters": {"type": "object", "properties": {
-      "goal": {"type": "string", "description": "目标描述"}},
-    "required": ["goal"]}}
+      "goal": {"type": "string", "description": "目标描述 (action=set 时必填)"},
+      "action": {"type": "string", "enum": ["set", "pause", "resume", "complete", "clear"], "description": "操作类型, 默认 set", "default": "set"},
+      "reason": {"type": "string", "description": "完成/失败原因 (action=complete 时使用)"}},
+    "required": ["action"]}}
   }},
   {"type": "function", "function": {
     "name": "update_todo",

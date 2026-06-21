@@ -304,6 +304,10 @@ func (r *Router) Dispatch(toolName string, args map[string]any, response *llm.Re
 		return r.doSkillRun(args, response)
 	case "spawn_subagent":
 		return r.doSpawnSubagent(args)
+	case "spawn_teammate":
+		return r.doSpawnTeammate(args)
+	case "send_message":
+		return r.doSendMessage(args)
 	case "exit_plan_mode":
 		return r.doExitPlanMode(args)
 	case "set_goal":
@@ -905,6 +909,7 @@ func (r *Router) isCodeBlocked(code string, codeType string) (bool, string) {
 // ==================== 长任务工具 ====================
 
 // doSpawnSubagent 启动子 agent 处理子任务
+// 参考 cc-haha AgentTool: 支持 isolation (worktree) 和 fork (缓存共享)
 func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 	prompt := strArg(args, "prompt", "")
 	if prompt == "" {
@@ -914,6 +919,8 @@ func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 		}
 	}
 	timeoutSec := intArg(args, "timeout", 300)
+	isolation := task.IsolationMode(strArg(args, "isolation", ""))
+	cwdOverride := strArg(args, "cwd", "")
 
 	if r.TaskRuntime == nil {
 		return &agent.StepOutcome{
@@ -924,9 +931,13 @@ func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 
 	// 启动子任务
 	subTask, err := r.TaskRuntime.Start(task.TaskConfig{
-		Type:     task.TypeSubagent,
-		ParentID: r.CurrentTaskID,
-		Prompt:   prompt,
+		Type:        task.TypeSubagent,
+		ParentID:    r.CurrentTaskID,
+		Prompt:      prompt,
+		Isolation:   isolation,
+		CwdOverride: cwdOverride,
+		ForkFrom:    r.CurrentTaskID, // fork 共享缓存前缀
+		Timeout:     time.Duration(timeoutSec) * time.Second,
 	})
 	if err != nil {
 		return &agent.StepOutcome{
@@ -935,16 +946,8 @@ func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 		}
 	}
 
-	// 等待子任务完成或超时
-	select {
-	case <-subTask.Wait():
-	case <-time.After(time.Duration(timeoutSec) * time.Second):
-		r.TaskRuntime.Abort(subTask.State.ID)
-		return &agent.StepOutcome{
-			Data:       "[Timeout] subagent exceeded timeout",
-			NextPrompt: fmt.Sprintf("子任务超时(%ds)，已中断", timeoutSec),
-		}
-	}
+	// 等待子任务完成 (timeout 已由 Runtime 管理, 这里仅等待)
+	<-subTask.Wait()
 
 	// 读取子任务输出
 	result := "子任务已完成"
@@ -954,13 +957,107 @@ func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 		result = "子任务被中断"
 	}
 
+	// worktree 隔离时, 提示变更位置
+	if subTask.State.WorktreePath != "" {
+		result += fmt.Sprintf("\n[worktree 路径: %s]", subTask.State.WorktreePath)
+	}
+
 	return &agent.StepOutcome{
 		Data:       result,
 		NextPrompt: fmt.Sprintf("子任务结果: %s。请基于此结果继续。", result),
 	}
 }
 
+// doSpawnTeammate 启动异步 teammate (非阻塞)
+// 参考 cc-haha spawnTeammate: 异步协作, 通过 SendMessage 通信
+func (r *Router) doSpawnTeammate(args map[string]any) *agent.StepOutcome {
+	prompt := strArg(args, "prompt", "")
+	if prompt == "" {
+		return &agent.StepOutcome{
+			Data:       "[Error] prompt required",
+			NextPrompt: "teammate 启动失败: 缺少 prompt 参数",
+		}
+	}
+	name := strArg(args, "name", "")
+	if name == "" {
+		return &agent.StepOutcome{
+			Data:       "[Error] name required",
+			NextPrompt: "teammate 启动失败: 缺少 name 参数 (用于 SendMessage 寻址)",
+		}
+	}
+	teamName := strArg(args, "team_name", "")
+	isolation := task.IsolationMode(strArg(args, "isolation", ""))
+
+	if r.TaskRuntime == nil {
+		return &agent.StepOutcome{
+			Data:       "[Error] TaskRuntime not configured",
+			NextPrompt: "teammate 启动失败: 运行时未配置",
+		}
+	}
+
+	teammateTask, err := r.TaskRuntime.Start(task.TaskConfig{
+		Type:      task.TypeTeammate,
+		ParentID:  r.CurrentTaskID,
+		Prompt:    prompt,
+		AgentName: name,
+		TeamName:  teamName,
+		Isolation: isolation,
+	})
+	if err != nil {
+		return &agent.StepOutcome{
+			Data:       fmt.Sprintf("[Error] %v", err),
+			NextPrompt: fmt.Sprintf("teammate 启动失败: %v", err),
+		}
+	}
+
+	return &agent.StepOutcome{
+		Data:       fmt.Sprintf("[Teammate %s 已启动, taskID: %s]", name, teammateTask.State.ID),
+		NextPrompt: fmt.Sprintf("teammate %s 已在后台运行, 可通过 send_message 向其发送消息。taskID: %s", name, teammateTask.State.ID),
+	}
+}
+
+// doSendMessage 跨 agent 发送消息
+// 参考 cc-haha SendMessage 工具
+func (r *Router) doSendMessage(args map[string]any) *agent.StepOutcome {
+	to := strArg(args, "to", "")
+	content := strArg(args, "content", "")
+	if to == "" || content == "" {
+		return &agent.StepOutcome{
+			Data:       "[Error] to and content required",
+			NextPrompt: "消息发送失败: 缺少 to 或 content 参数",
+		}
+	}
+
+	if r.TaskRuntime == nil {
+		return &agent.StepOutcome{
+			Data:       "[Error] TaskRuntime not configured",
+			NextPrompt: "消息发送失败: 运行时未配置",
+		}
+	}
+
+	// 发送者名称: 当前任务的 AgentName, 或默认 "main"
+	from := "main"
+	if r.CurrentTaskID != "" {
+		if t, err := r.TaskRuntime.Get(r.CurrentTaskID); err == nil && t.State.AgentName != "" {
+			from = t.State.AgentName
+		}
+	}
+
+	if err := r.TaskRuntime.SendMessage(from, to, content); err != nil {
+		return &agent.StepOutcome{
+			Data:       fmt.Sprintf("[Error] %v", err),
+			NextPrompt: fmt.Sprintf("消息发送失败: %v", err),
+		}
+	}
+
+	return &agent.StepOutcome{
+		Data:       fmt.Sprintf("[消息已发送给 %s]", to),
+		NextPrompt: fmt.Sprintf("消息已发送给 %s", to),
+	}
+}
+
 // doExitPlanMode 计划模式: 提交计划等待审批
+// 参考 cc-haha ExitPlanModeTool: 提交计划 -> 暂停 -> 用户审批 -> 继续/终止
 func (r *Router) doExitPlanMode(args map[string]any) *agent.StepOutcome {
 	plan := strArg(args, "plan", "")
 	if plan == "" {
@@ -970,26 +1067,102 @@ func (r *Router) doExitPlanMode(args map[string]any) *agent.StepOutcome {
 		}
 	}
 
-	// TODO: 通过 Runtime 暂停任务并等待审批
-	// 当前简化实现: 直接返回计划，让用户在下一轮确认
+	// 通过 PlanSubmit 字段触发 agent loop 的审批流程
+	// loop 会发出 DisplayItem{Source:"plan_submit"} 并阻塞等待 Runtime.Resume
 	return &agent.StepOutcome{
 		Data:       plan,
-		NextPrompt: fmt.Sprintf("已提交计划等待审批:\n%s\n\n请等待用户确认后继续执行。", plan),
+		NextPrompt: "计划已提交，等待审批。",
+		PlanSubmit: plan,
 	}
 }
 
-// doSetGoal 设置目标
+// doSetGoal 设置或更新目标
+// 参考 cc-haha goalState.ts: 支持 set/pause/resume/complete/clear 操作
 func (r *Router) doSetGoal(args map[string]any) *agent.StepOutcome {
 	goal := strArg(args, "goal", "")
-	if goal == "" {
+	action := strArg(args, "action", "set") // set/pause/resume/complete/clear
+
+	// 获取当前 agent 的 GoalTracker (通过 TaskRuntime)
+	if r.TaskRuntime == nil || r.CurrentTaskID == "" {
 		return &agent.StepOutcome{
-			Data:       "[Error] goal required",
-			NextPrompt: "请提供目标内容",
+			Data:       "[Error] TaskRuntime not configured",
+			NextPrompt: "目标设置失败: 运行时未配置",
 		}
 	}
-	return &agent.StepOutcome{
-		Data:       goal,
-		NextPrompt: fmt.Sprintf("目标已设置: %s。后续操作将围绕此目标进行。", goal),
+
+	t, err := r.TaskRuntime.Get(r.CurrentTaskID)
+	if err != nil {
+		return &agent.StepOutcome{
+			Data:       fmt.Sprintf("[Error] %v", err),
+			NextPrompt: fmt.Sprintf("目标设置失败: %v", err),
+		}
+	}
+
+	tracker := t.Agent.GoalTracker
+
+	switch action {
+	case "set":
+		if goal == "" {
+			return &agent.StepOutcome{
+				Data:       "[Error] goal required",
+				NextPrompt: "请提供目标内容",
+			}
+		}
+		t.Agent.GoalTracker = agent.NewGoalTracker(goal)
+		t.Agent.Goal = goal
+		t.State.Goal = goal
+		r.TaskRuntime.SaveState(t.State)
+		return &agent.StepOutcome{
+			Data:       goal,
+			NextPrompt: fmt.Sprintf("目标已设置: %s。后续操作将围绕此目标进行。", goal),
+		}
+
+	case "pause":
+		if tracker == nil {
+			return &agent.StepOutcome{Data: "[Error] no active goal", NextPrompt: "无活跃目标可暂停"}
+		}
+		tracker.Pause()
+		return &agent.StepOutcome{
+			Data:       tracker.StatusReport(),
+			NextPrompt: fmt.Sprintf("目标已暂停: %s", tracker.Objective()),
+		}
+
+	case "resume":
+		if tracker == nil {
+			return &agent.StepOutcome{Data: "[Error] no goal", NextPrompt: "无目标可恢复"}
+		}
+		tracker.Resume()
+		return &agent.StepOutcome{
+			Data:       tracker.StatusReport(),
+			NextPrompt: fmt.Sprintf("目标已恢复: %s", tracker.Objective()),
+		}
+
+	case "complete":
+		if tracker == nil {
+			return &agent.StepOutcome{Data: "[Error] no goal", NextPrompt: "无目标可完成"}
+		}
+		reason := strArg(args, "reason", "已完成")
+		tracker.Complete(reason)
+		return &agent.StepOutcome{
+			Data:       tracker.StatusReport(),
+			NextPrompt: fmt.Sprintf("目标已完成: %s (%s)", tracker.Objective(), reason),
+		}
+
+	case "clear":
+		t.Agent.GoalTracker = nil
+		t.Agent.Goal = ""
+		t.State.Goal = ""
+		r.TaskRuntime.SaveState(t.State)
+		return &agent.StepOutcome{
+			Data:       "",
+			NextPrompt: "目标已清除",
+		}
+
+	default:
+		return &agent.StepOutcome{
+			Data:       fmt.Sprintf("[Error] unknown action: %s", action),
+			NextPrompt: fmt.Sprintf("未知操作: %s (支持 set/pause/resume/complete/clear)", action),
+		}
 	}
 }
 
