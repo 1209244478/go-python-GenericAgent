@@ -38,6 +38,11 @@ type Agent struct {
 	SystemPrompt string
 	ToolsSchema  []llm.ToolSchema
 
+	// LLM 参数 (用于 cache safe params 对齐)
+	Model        string
+	Temperature  float64
+	MaxTokens    int
+
 	// 长任务能力
 	ContextMgr   *ContextManager
 	Goal         string // 目标追踪 (兼容旧字段)
@@ -350,6 +355,11 @@ func (a *Agent) Abort() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.StopSignal = true
+}
+
+// Stop 停止 agent (Abort 的语义化别名, 供 shutdown 协议调用)
+func (a *Agent) Stop() {
+	a.Abort()
 }
 
 // InjectMessage 注入外部消息 (teammate 通信)

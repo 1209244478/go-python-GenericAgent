@@ -104,7 +104,8 @@
       "prompt": {"type": "string", "description": "子任务指令，描述清楚子任务的目标和约束"},
       "timeout": {"type": "integer", "description": "超时秒数，默认300", "default": 300},
       "isolation": {"type": "string", "enum": ["worktree"], "description": "隔离模式。worktree 创建临时 git 工作树，子 agent 在隔离副本中操作"},
-      "cwd": {"type": "string", "description": "子任务工作目录(绝对路径)。与 isolation 互斥"}},
+      "cwd": {"type": "string", "description": "子任务工作目录(绝对路径)。与 isolation 互斥"},
+      "agent_type": {"type": "string", "enum": ["general-purpose", "explore", "plan", "verification"], "description": "预定义 agent 类型: general-purpose(通用)/explore(只读调研)/plan(计划制定)/verification(验证测试)"}},
     "required": ["prompt"]}}
   }},
   {"type": "function", "function": {

@@ -43,6 +43,29 @@ const (
 	IsolationWorktree IsolationMode = "worktree" // git worktree 隔离
 )
 
+// BuiltinAgentType 预定义 agent 类型
+// 参考 cc-haha built-in agents: general-purpose / plan / explore / verification
+type BuiltinAgentType string
+
+const (
+	BuiltinNone         BuiltinAgentType = ""                // 默认通用 agent
+	BuiltinGeneral      BuiltinAgentType = "general-purpose" // 通用任务
+	BuiltinExplore      BuiltinAgentType = "explore"         // 探索/调研 (只读)
+	BuiltinPlan         BuiltinAgentType = "plan"            // 计划制定
+	BuiltinVerification BuiltinAgentType = "verification"    // 验证/测试
+)
+
+// CacheSafeParams 缓存安全参数
+// 参考 cc-haha forkedAgent.ts: CacheSafeParams
+// fork 子任务时, 这些参数与父任务对齐, 以共享 LLM 缓存前缀
+// 任何不同都会导致缓存失效
+type CacheSafeParams struct {
+	Model       string  `json:"model"`        // 必须与父任务一致
+	SystemPrompt string `json:"system_prompt"` // 必须与父任务一致
+	Temperature float64 `json:"temperature"`  // 必须与父任务一致
+	MaxTokens   int     `json:"max_tokens"`   // 必须与父任务一致
+}
+
 // TokenUsage token 用量
 type TokenUsage struct {
 	InputTokens  int `json:"input_tokens"`
@@ -77,6 +100,11 @@ type TaskState struct {
 	ForkFrom     string        `json:"fork_from,omitempty"`     // fork 来源任务ID (缓存共享)
 	AgentName    string        `json:"agent_name,omitempty"`    // teammate 名称 (用于 SendMessage 寻址)
 	TeamName     string        `json:"team_name,omitempty"`     // 团队名称
+
+	// 新增字段
+	BuiltinAgent BuiltinAgentType `json:"builtin_agent,omitempty"` // 预定义 agent 类型
+	CacheSafe    *CacheSafeParams `json:"cache_safe,omitempty"`    // 缓存安全参数 (fork 时对齐)
+	ForkDepth    int              `json:"fork_depth,omitempty"`    // fork 深度 (递归守卫)
 }
 
 // TaskConfig 启动任务的配置
@@ -97,6 +125,11 @@ type TaskConfig struct {
 	AgentName   string        // teammate 名称
 	TeamName    string        // 团队名
 	Timeout     time.Duration // 任务级超时 (0=无限)
+
+	// 新增
+	BuiltinAgent BuiltinAgentType // 预定义 agent 类型
+	CacheSafe    *CacheSafeParams // 缓存安全参数
+	ForkDepth    int              // fork 深度
 }
 
 // MessageEnvelope 跨 agent 消息信封

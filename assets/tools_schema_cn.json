@@ -15,6 +15,7 @@
     "parameters": {"type": "object", "properties": {
       "path": {"type": "string", "description": "文件相对或绝对路径"},
       "start": {"type": "integer", "description": "起始行号（从 1 开始）"},
+      "offset": {"type": "integer", "description": "start 的别名。起始行号（从 1 开始）"},
       "count": {"type": "integer", "description": "读取的行数", "default": 200},
       "keyword": {"type": "string", "description": "可选搜索关键字。如果提供，将返回第一个匹配项（忽略大小写）及其周边的内容"},
       "show_linenos": {"type": "boolean", "description": "是否显示行号，建议开启以辅助 file_patch 定位", "default": true}}}
@@ -70,5 +71,85 @@
     "name": "start_long_term_update",
     "description": "准备开始提炼记忆。发现值得长期记忆的信息（环境事实/用户偏好/避坑经验）时调用此工具。已记忆更新或在自主流程内时无需调用。超15轮完成的任务必须调用以沉淀经验",
     "parameters": {"type": "object", "properties": {}}}
-  }
+  }},
+  {"type": "function", "function": {
+    "name": "skill_run",
+    "description": "运行 Python 技能。可用: frontend-slides (基于模板的 HTML 幻灯片, 一次调用生成)。做演示文稿: 1) match_templates → 2) 让用户选模板 → 3) 询问主题/内容 → 4) 生成。禁止用 file_write 创建 HTML",
+    "parameters": {"type": "object", "properties": {
+      "skill": {"type": "string", "description": "技能名, 如 frontend-slides"},
+      "action": {"type": "string", "description": "动作: generate (一次输出), match_templates, read_template, list_templates, info, read_file"},
+      "slug": {"type": "string", "description": "[generate/match/read] 模板 slug: blue-professional, signal, bold-poster, creative-mode, editorial-forest, capsule, 8-bit-orbit, monochrome 等"},
+      "title": {"type": "string", "description": "[generate] 演示标题"},
+      "subtitle": {"type": "string", "description": "[generate] 副标题"},
+      "author": {"type": "string", "description": "[generate] 作者"},
+      "date": {"type": "string", "description": "[generate] 日期字符串"},
+      "slides": {"type": "array", "items": {"type": "object", "properties": {
+        "layout": {"type": "string", "description": "cover, agenda, metrics, dashboard, split, bars, quote, timeline, detail, closing. 自动: slide0=cover, 最后=closing, 其他=metrics"},
+        "heading": {"type": "string", "description": "幻灯片标题"},
+        "body": {"type": "string", "description": "幻灯片正文/副标题"},
+        "items": {"type": "array", "items": {"type": "string"}, "description": "幻灯片要点列表"}}}, "description": "[generate] 幻灯片内容数组。每张: {layout, heading, body, items}"},
+      "replacements": {"type": "object", "additionalProperties": {"type": "string"}, "description": "[generate] 细粒度文本替换: 旧文本 -> 新文本"},
+      "output_path": {"type": "string", "description": "[generate] 输出 HTML 文件路径 (相对工作区, 如 ai-era.html)。省略则保存到 CWD"},
+      "keywords": {"type": "array", "items": {"type": "string"}, "description": "[match_templates] 主题关键词"},
+      "mood": {"type": "string", "description": "[match_templates] 期望氛围"},
+      "occasion": {"type": "string", "description": "[match_templates] 使用场景"},
+      "scheme": {"type": "string", "description": "[match_templates] light/dark/mixed"},
+      "file": {"type": "string", "description": "[read_file] 从技能目录读取的文件"}},
+    "required": ["skill"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "spawn_subagent",
+    "description": "启动子 agent 处理子任务，同步阻塞等待结果返回。支持 worktree 隔离。适用于复杂任务拆解、独立子任务执行",
+    "parameters": {"type": "object", "properties": {
+      "prompt": {"type": "string", "description": "子任务指令，描述清楚子任务的目标和约束"},
+      "timeout": {"type": "integer", "description": "超时秒数，默认300", "default": 300},
+      "isolation": {"type": "string", "enum": ["worktree"], "description": "隔离模式。worktree 创建临时 git 工作树，子 agent 在隔离副本中操作"},
+      "cwd": {"type": "string", "description": "子任务工作目录(绝对路径)。与 isolation 互斥"},
+      "agent_type": {"type": "string", "enum": ["general-purpose", "explore", "plan", "verification"], "description": "预定义 agent 类型: general-purpose(通用)/explore(只读调研)/plan(计划制定)/verification(验证测试)"}},
+    "required": ["prompt"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "spawn_teammate",
+    "description": "启动异步 teammate agent 在后台运行，非阻塞。通过 send_message 通信。适用于长时间并行协作",
+    "parameters": {"type": "object", "properties": {
+      "prompt": {"type": "string", "description": "teammate 的任务指令"},
+      "name": {"type": "string", "description": "teammate 名称，用于 send_message 寻址(必填)"},
+      "team_name": {"type": "string", "description": "团队名称，同团队的成员可互发消息"},
+      "isolation": {"type": "string", "enum": ["worktree"], "description": "隔离模式"}},
+    "required": ["prompt", "name"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "send_message",
+    "description": "向其他 agent 发送消息。to 为 agent 名称或 'all'(广播同团队)",
+    "parameters": {"type": "object", "properties": {
+      "to": {"type": "string", "description": "接收者 agent 名称，或 'all' 广播同团队"},
+      "content": {"type": "string", "description": "消息内容"}},
+    "required": ["to", "content"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "exit_plan_mode",
+    "description": "计划模式下提交计划等待用户审批。审批通过后才能继续执行",
+    "parameters": {"type": "object", "properties": {
+      "plan": {"type": "string", "description": "计划内容，包含步骤、预期结果、风险评估"}},
+    "required": ["plan"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "set_goal",
+    "description": "设置或管理当前会话的长期目标。支持 set/pause/resume/complete/clear 操作。系统会定期提醒 agent 围绕目标执行",
+    "parameters": {"type": "object", "properties": {
+      "goal": {"type": "string", "description": "目标描述 (action=set 时必填)"},
+      "action": {"type": "string", "enum": ["set", "pause", "resume", "complete", "clear"], "description": "操作类型, 默认 set", "default": "set"},
+      "reason": {"type": "string", "description": "完成/失败原因 (action=complete 时使用)"}},
+    "required": ["action"]}}
+  }},
+  {"type": "function", "function": {
+    "name": "update_todo",
+    "description": "更新任务清单，追踪多步骤任务进度。每次完成一步后更新状态",
+    "parameters": {"type": "object", "properties": {
+      "todos": {"type": "array", "items": {"type": "object", "properties": {
+        "content": {"type": "string", "description": "任务内容"},
+        "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "任务状态"}},
+      "required": ["content", "status"]}}}},
+    "required": ["todos"]}}
+  }}
 ]

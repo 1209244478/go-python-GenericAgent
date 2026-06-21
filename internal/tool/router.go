@@ -328,7 +328,7 @@ func (r *Router) doCodeRun(args map[string]any, response *llm.Response) *agent.S
 	if code == "" {
 		code = strArg(args, "script", "")
 	}
-	if code == "" {
+	if code == "" && response != nil {
 		code = extractCodeBlock(response.Content, codeType)
 	}
 	if code == "" {
@@ -822,16 +822,35 @@ func (r *Router) isPathAllowed(path string) bool {
 		abs = realPath
 	}
 
-	if strings.HasPrefix(abs, filepath.Clean(r.Cwd)) {
+	// 解析 r.Cwd 的符号链接/短名称 (Windows 8.3 短名称兼容)
+	cwdResolved := r.Cwd
+	if rp, err := resolveSymlinks(filepath.Clean(r.Cwd)); err == nil {
+		cwdResolved = rp
+	}
+
+	if strings.HasPrefix(abs, cwdResolved) {
 		return true
 	}
 
-	if r.SkillDir != "" && strings.HasPrefix(abs, filepath.Clean(r.SkillDir)) {
-		return true
+	if r.SkillDir != "" {
+		skillDirResolved := r.SkillDir
+		if rp, err := resolveSymlinks(filepath.Clean(r.SkillDir)); err == nil {
+			skillDirResolved = rp
+		}
+		if strings.HasPrefix(abs, skillDirResolved) {
+			return true
+		}
 	}
 
 	for _, dir := range r.AllowedDirs {
-		if dir != "" && strings.HasPrefix(abs, filepath.Clean(dir)) {
+		if dir == "" {
+			continue
+		}
+		dirResolved := dir
+		if rp, err := resolveSymlinks(filepath.Clean(dir)); err == nil {
+			dirResolved = rp
+		}
+		if strings.HasPrefix(abs, dirResolved) {
 			return true
 		}
 	}
@@ -851,7 +870,13 @@ func (r *Router) isWriteAllowed(path string) bool {
 		abs = realPath
 	}
 
-	if strings.HasPrefix(abs, filepath.Clean(r.Cwd)) {
+	// 解析 r.Cwd 的符号链接/短名称 (Windows 8.3 短名称兼容)
+	cwdResolved := r.Cwd
+	if rp, err := resolveSymlinks(filepath.Clean(r.Cwd)); err == nil {
+		cwdResolved = rp
+	}
+
+	if strings.HasPrefix(abs, cwdResolved) {
 		return true
 	}
 
@@ -910,6 +935,7 @@ func (r *Router) isCodeBlocked(code string, codeType string) (bool, string) {
 
 // doSpawnSubagent 启动子 agent 处理子任务
 // 参考 cc-haha AgentTool: 支持 isolation (worktree) 和 fork (缓存共享)
+// 增强: 递归 fork 守卫 + cache safe params + built-in agent 类型
 func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 	prompt := strArg(args, "prompt", "")
 	if prompt == "" {
@@ -921,6 +947,7 @@ func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 	timeoutSec := intArg(args, "timeout", 300)
 	isolation := task.IsolationMode(strArg(args, "isolation", ""))
 	cwdOverride := strArg(args, "cwd", "")
+	builtinAgent := task.BuiltinAgentType(strArg(args, "agent_type", ""))
 
 	if r.TaskRuntime == nil {
 		return &agent.StepOutcome{
@@ -929,15 +956,48 @@ func (r *Router) doSpawnSubagent(args map[string]any) *agent.StepOutcome {
 		}
 	}
 
+	// 递归 fork 守卫: 防止子 agent 再次 fork 导致栈溢出
+	// 参考 cc-haha isInForkChild: 检测 boilerplate fork
+	var parentForkDepth int
+	if r.CurrentTaskID != "" {
+		if parentTask, err := r.TaskRuntime.Get(r.CurrentTaskID); err == nil {
+			parentForkDepth = parentTask.State.ForkDepth
+		}
+	}
+	const maxForkDepth = 3 // 最大 fork 深度
+	if parentForkDepth >= maxForkDepth {
+		return &agent.StepOutcome{
+			Data:       fmt.Sprintf("[Error] max fork depth %d exceeded", maxForkDepth),
+			NextPrompt: fmt.Sprintf("子任务启动失败: 已达最大 fork 深度 %d, 避免递归 fork", maxForkDepth),
+		}
+	}
+
+	// 构造 cache safe params (与父任务对齐以共享缓存前缀)
+	// 参考 cc-haha CacheSafeParams
+	var cacheSafe *task.CacheSafeParams
+	if r.CurrentTaskID != "" {
+		if parentTask, err := r.TaskRuntime.Get(r.CurrentTaskID); err == nil && parentTask.Agent != nil {
+			cacheSafe = &task.CacheSafeParams{
+				Model:        parentTask.Agent.Model,
+				Temperature:  parentTask.Agent.Temperature,
+				MaxTokens:    parentTask.Agent.MaxTokens,
+				SystemPrompt: parentTask.Agent.SystemPrompt,
+			}
+		}
+	}
+
 	// 启动子任务
 	subTask, err := r.TaskRuntime.Start(task.TaskConfig{
-		Type:        task.TypeSubagent,
-		ParentID:    r.CurrentTaskID,
-		Prompt:      prompt,
-		Isolation:   isolation,
-		CwdOverride: cwdOverride,
-		ForkFrom:    r.CurrentTaskID, // fork 共享缓存前缀
-		Timeout:     time.Duration(timeoutSec) * time.Second,
+		Type:         task.TypeSubagent,
+		ParentID:     r.CurrentTaskID,
+		Prompt:       prompt,
+		Isolation:    isolation,
+		CwdOverride:  cwdOverride,
+		ForkFrom:     r.CurrentTaskID, // fork 共享缓存前缀
+		Timeout:      time.Duration(timeoutSec) * time.Second,
+		BuiltinAgent: builtinAgent,
+		CacheSafe:    cacheSafe,
+		ForkDepth:    parentForkDepth + 1,
 	})
 	if err != nil {
 		return &agent.StepOutcome{
@@ -1260,7 +1320,11 @@ func isOtherUserDir(path string, currentUserDir string) bool {
 	if err == nil {
 		abs = realPath
 	}
+	// 解析 currentUserDir 的符号链接/短名称 (Windows 8.3 短名称兼容)
 	cleanUserDir := filepath.Clean(currentUserDir)
+	if rp, err := resolveSymlinks(cleanUserDir); err == nil {
+		cleanUserDir = rp
+	}
 	parentDir := filepath.Dir(cleanUserDir)
 	if !strings.HasPrefix(abs, parentDir+string(filepath.Separator)) {
 		return false
@@ -1280,6 +1344,12 @@ func isOtherUserDir(path string, currentUserDir string) bool {
 func resolveSymlinks(path string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
+		// 路径不存在时, 尝试解析父目录 (文件尚未创建的写入场景)
+		dir := filepath.Dir(path)
+		base := filepath.Base(path)
+		if dirResolved, dirErr := filepath.EvalSymlinks(dir); dirErr == nil {
+			return filepath.Clean(filepath.Join(dirResolved, base)), nil
+		}
 		return path, err
 	}
 	return filepath.Clean(resolved), nil

@@ -2,8 +2,11 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/genericagent/ga/internal/llm"
 )
 
 // GoalState 目标状态
@@ -158,4 +161,148 @@ func (g *GoalTracker) StatusReport() string {
 // HookTimeout 返回 hook 超时时长
 func (g *GoalTracker) HookTimeout() time.Duration {
 	return g.hookTimeout
+}
+
+// EvaluateCompletionWithLLM 使用 LLM 评估目标完成度
+// 参考 cc-haha createGoalPromptHook: Stop hook 用 LLM 判断目标是否完成
+// 返回: (已完成, 评估理由, 错误)
+//
+// 评估流程:
+//  1. 构造评估 prompt (目标 + 最近对话摘要)
+//  2. 调用 LLM 判断是否完成
+//  3. 超时则返回 false (保守判断)
+func (g *GoalTracker) EvaluateCompletionWithLLM(client *llm.Client, recentMessages []llm.Message) (bool, string, error) {
+	g.mu.RLock()
+	objective := g.objective
+	g.mu.RUnlock()
+
+	if objective == "" {
+		return false, "无目标", nil
+	}
+
+	// 构造最近对话摘要
+	var recentText strings.Builder
+	recentText.WriteString("最近对话:\n")
+	for _, m := range recentMessages {
+		if m.Role == "system" {
+			continue
+		}
+		content, ok := m.Content.(string)
+		if !ok || content == "" {
+			continue
+		}
+		// 截断过长内容
+		if len([]rune(content)) > 200 {
+			content = string([]rune(content)[:200]) + "..."
+		}
+		recentText.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, content))
+	}
+
+	prompt := fmt.Sprintf(`你是目标评估助手。请判断以下目标是否已完成。
+
+目标: %s
+
+%s
+
+请回答:
+1. 目标是否已完成? (是/否)
+2. 完成理由 (一句话)
+
+格式:
+完成: 是/否
+理由: <一句话>`, objective, recentText.String())
+
+	// 带超时调用 LLM
+	resultCh := make(chan struct {
+		text string
+		err  error
+	}, 1)
+
+	go func() {
+		ch, err := client.Chat(llm.ChatParams{
+			Messages: []llm.Message{
+				{Role: "user", Content: prompt},
+			},
+			MaxTokens:   100,
+			Temperature: 0,
+		})
+		if err != nil {
+			resultCh <- struct {
+				text string
+				err  error
+			}{"", err}
+			return
+		}
+
+		var result string
+		for chunk := range ch {
+			if chunk.Error != nil {
+				resultCh <- struct {
+					text string
+					err  error
+				}{"", chunk.Error}
+				return
+			}
+			if chunk.Text != "" {
+				result += chunk.Text
+			}
+		}
+		resultCh <- struct {
+			text string
+			err  error
+		}{result, nil}
+	}()
+
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return false, "", res.err
+		}
+		// 解析结果
+		completed := strings.Contains(res.text, "完成: 是") ||
+			strings.Contains(res.text, "完成:是") ||
+			strings.Contains(res.text, "是\n")
+		reason := ""
+		for _, line := range strings.Split(res.text, "\n") {
+			if strings.HasPrefix(line, "理由:") || strings.HasPrefix(line, "理由：") {
+				reason = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "理由:"), "理由："))
+				break
+			}
+		}
+		return completed, reason, nil
+	case <-time.After(g.hookTimeout):
+		// 超时, 保守判断为未完成
+		return false, "评估超时", fmt.Errorf("goal evaluation timeout after %v", g.hookTimeout)
+	}
+}
+
+// RestoreFromTranscript 从 transcript 恢复目标状态
+// 参考 cc-haha ensureThreadGoalHookFromTranscript
+// 分析历史消息, 提取目标信息
+func RestoreFromTranscript(messages []llm.Message) *GoalTracker {
+	for _, m := range messages {
+		if m.Role != "user" {
+			continue
+		}
+		content, ok := m.Content.(string)
+		if !ok {
+			continue
+		}
+		// 检测 set_goal 工具调用结果
+		if strings.Contains(content, "目标已设置:") {
+			// 提取目标内容
+			idx := strings.Index(content, "目标已设置:")
+			if idx >= 0 {
+				goalText := strings.TrimSpace(content[idx+len("目标已设置:"):])
+				// 截断到第一个换行
+				if newlineIdx := strings.Index(goalText, "\n"); newlineIdx > 0 {
+					goalText = goalText[:newlineIdx]
+				}
+				if goalText != "" {
+					return NewGoalTracker(goalText)
+				}
+			}
+		}
+	}
+	return nil
 }

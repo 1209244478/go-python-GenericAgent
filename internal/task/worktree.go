@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // WorktreeManager 管理 git worktree 隔离
@@ -111,6 +112,63 @@ func (w *WorktreeManager) GetWorktreePath(taskID string) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.registry[taskID]
+}
+
+// GetOrCreateWorktree 获取或创建 worktree (复用机制)
+// 参考 cc-haha getOrCreateWorktree: 恢复任务时复用已有 worktree
+// 如果 taskID 对应的 worktree 已存在且可用, 直接返回; 否则创建新的
+func (w *WorktreeManager) GetOrCreateWorktree(repoRoot, taskID string) (string, func(), error) {
+	w.mu.Lock()
+	existingPath := w.registry[taskID]
+	w.mu.Unlock()
+
+	// 检查已有 worktree 是否仍可用
+	if existingPath != "" {
+		if _, err := os.Stat(existingPath); err == nil {
+			// 验证仍是有效 worktree
+			cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+			cmd.Dir = existingPath
+			if err := cmd.Run(); err == nil {
+				// 可复用, 返回空 cleanup (不删除)
+				return existingPath, func() {}, nil
+			}
+		}
+		// 已失效, 清理注册
+		w.mu.Lock()
+		delete(w.registry, taskID)
+		w.mu.Unlock()
+	}
+
+	return w.CreateWorktree(repoRoot, taskID)
+}
+
+// CleanupStaleWorktrees 清理过期的 worktree
+// 参考 cc-haha cleanupStaleAgentWorktrees: 清理超过 maxAge 的 worktree
+func (w *WorktreeManager) CleanupStaleWorktrees(repoRoot string, maxAge time.Duration) int {
+	w.mu.Lock()
+	registry := make(map[string]string, len(w.registry))
+	for k, v := range w.registry {
+		registry[k] = v
+	}
+	w.mu.Unlock()
+
+	removed := 0
+	now := time.Now()
+	for taskID, wtPath := range registry {
+		info, err := os.Stat(wtPath)
+		if err != nil {
+			// 路径不存在, 清理注册
+			w.mu.Lock()
+			delete(w.registry, taskID)
+			w.mu.Unlock()
+			continue
+		}
+		if now.Sub(info.ModTime()) > maxAge {
+			_ = w.RemoveWorktree(repoRoot, taskID)
+			removed++
+		}
+	}
+	return removed
 }
 
 // HasWorktreeChanges 检查 worktree 是否有未提交变更
