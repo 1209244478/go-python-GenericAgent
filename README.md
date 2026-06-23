@@ -18,9 +18,11 @@
 - [配置说明](#配置说明)
 - [编译与运行](#编译与运行)
 - [项目结构](#项目结构)
+- [Agent 高级能力](#agent-高级能力)
 - [API 接口](#api-接口)
 - [工具列表](#工具列表)
 - [Python 技能层](#python-技能层)
+- [Reflect 反思模块](#reflect-反思模块)
 - [安全防护](#安全防护)
 - [前端系统](#前端系统)
 - [测试](#测试)
@@ -38,30 +40,45 @@
 │  │  Agent   │  │   LLM    │  │   Tool   │  │   Memory   │  │
 │  │  Loop    │→ │  Client  │→ │  Router  │  │  Manager   │  │
 │  │(goroutine)│  │(SSE流式) │  │(调度中心) │  │  (分层)    │  │
-│  └──────────┘  └──────────┘  └────┬─────┘  └────────────┘  │
-│                                    │                         │
-│  ┌──────────┐  ┌──────────┐       │       ┌────────────┐   │
-│  │  Config  │  │ Frontend │       │       │    Auth    │   │
-│  │(热加载)  │  │   Hub    │←──────┘       │(JWT+Redis) │   │
-│  └──────────┘  └──────────┘               └────────────┘   │
-│                                                              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │   Web    │  │ Workspace│  │  Session  │  │   Code     │  │
-│  │ Handler  │  │(文件管理) │  │ (多会话)  │  │  Sandbox   │  │
-│  │ (Gin)    │  │(用户隔离) │  │          │  │  (安全沙箱) │  │
-│  └──────────┘  └──────────┘  └──────────┘  └────────────┘  │
-│                                    │                         │
-└────────────────────────────────────┼─────────────────────────┘
-                                     │ 子进程 (exec.CommandContext)
-                                     ▼
-                         ┌───────────────────────┐
-                         │   Python 技能层        │
-                         │                       │
-                         │  skills/bridge.py     │
-                         │  skills/test_skill.py │
-                         │  skills/your_skill.py │
-                         │  memory/*.py          │
-                         └───────────────────────┘
+│  └────┬─────┘  └──────────┘  └────┬─────┘  └────────────┘  │
+│       │                            │                         │
+│  ┌────▼──────────────────┐         │       ┌────────────┐   │
+│  │ Agent 高级能力         │         │       │    Auth    │   │
+│  │ ┌────────┐ ┌────────┐ │         │       │(JWT+Redis) │   │
+│  │ │Context │ │  Goal  │ │         │       └────────────┘   │
+│  │ │Manager │ │Tracker │ │         │                         │
+│  │ └────────┘ └────────┘ │         │                         │
+│  │ ┌────────┐ ┌────────┐ │         │                         │
+│  │ │  Plan  │ │ Context│ │         │                         │
+│  │ │  File  │ │Compact │ │         │                         │
+│  │ └────────┘ └────────┘ │         │                         │
+│  └───────────────────────┘         │                         │
+│       │                            │                         │
+│  ┌────▼────────────────────────────▼─────────────────────┐  │
+│  │              Task Runtime (任务运行时)                 │  │
+│  │  ┌──────┐ ┌──────┐ ┌──────────┐ ┌──────┐ ┌─────────┐ │  │
+│  │  │Store │ │Recover│ │Worktree  │ │Timeout│ │Message  │ │  │
+│  │  │(磁盘)│ │(恢复) │ │(git隔离) │ │(超时) │ │Router   │ │  │
+│  │  └──────┘ └──────┘ └──────────┘ └──────┘ └─────────┘ │  │
+│  └───────────────────────────────────────────────────────┘  │
+│       │                                                      │
+│  ┌────▼─────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
+│  │   Web        │  │ Workspace│  │  Session  │  │  Code  │  │
+│  │  Handler     │  │(文件管理) │  │ (多会话)  │  │ Sandbox│  │
+│  │  (Gin)       │  │(用户隔离) │  │          │  │(安全)  │  │
+│  └──────────────┘  └──────────┘  └──────────┘  └────────┘  │
+│       │                                                      │
+└───────┼──────────────────────────────────────────────────────┘
+        │ 子进程 (exec.CommandContext)
+        ▼
+┌───────────────────────────┐    ┌───────────────────────────┐
+│   Python 技能层            │    │   Reflect 反思模块         │
+│                           │    │                           │
+│  skills/bridge.py         │    │  reflect/scheduler.py     │
+│  skills/test_skill.py     │    │  reflect/autonomous.py    │
+│  skills/your_skill.py     │    │  reflect/goal_mode.py     │
+│  memory/*.py              │    │  reflect/agent_team_*.py  │
+└───────────────────────────┘    └───────────────────────────┘
 ```
 
 **核心设计原则：**
@@ -71,6 +88,9 @@
 - **子进程桥接**：Go 通过 `exec.CommandContext` 调用 Python 脚本，JSON 序列化通信
 - **多用户隔离**：JWT 认证 + Redis 会话 + 工作空间路径隔离
 - **代码沙箱**：黑名单 + 反混淆归一化，防止恶意代码执行
+- **任务持久化**：磁盘状态存储 + 中断恢复 + worktree 隔离
+- **多级上下文压缩**：microcompact → session memory → LLM 摘要 → 硬截断降级链
+- **目标追踪 + 计划模式**：状态机驱动 + 审批工作流 + 周期提醒
 
 ---
 
@@ -302,11 +322,23 @@ GenericAgent/
 │   ├── server/main.go          # Web 服务器入口
 │   └── ga/main.go              # CLI 模式入口
 ├── internal/
-│   ├── agent/loop.go           # Agent 核心循环（goroutine + channel）
+│   ├── agent/                  # Agent 核心
+│   │   ├── loop.go             # Agent 循环（goroutine + channel + 超时检查）
+│   │   ├── context.go          # 多级上下文压缩（microcompact/session memory/LLM/硬截断）
+│   │   ├── goal.go             # 目标追踪状态机（active/paused/done/failed）
+│   │   └── plan.go             # 计划模式（文件持久化 + 审批工作流）
 │   ├── llm/client.go           # LLM 客户端（SSE 流式解析）
 │   ├── tool/router.go          # 工具路由 + Python 子进程调度 + 代码沙箱
 │   ├── config/config.go        # 配置管理（.env / mykey.json 热加载）
 │   ├── memory/manager.go       # 分层记忆管理
+│   ├── task/                   # 任务持久化与编排
+│   │   ├── task.go             # 任务状态/类型/隔离模式/CacheSafeParams 定义
+│   │   ├── store.go            # 磁盘持久化（state.json + messages.json）
+│   │   ├── runtime.go          # 任务运行时（管理活跃任务 + 订阅 + 审批信号）
+│   │   ├── recovery.go         # 中断恢复（孤儿消息过滤 + transcript 重建）
+│   │   ├── timeout.go          # 空闲超时监控 + 优雅关闭
+│   │   ├── worktree.go         # git worktree 隔离（子任务独立工作树）
+│   │   └── message_router.go   # 跨 agent 消息路由（teammate 通信 + shutdown 协议）
 │   ├── frontend/hub.go         # 多前端并发 Hub
 │   ├── auth/                   # 认证模块
 │   │   ├── jwt.go              # JWT 令牌管理
@@ -323,14 +355,28 @@ GenericAgent/
 │   ├── login.html              # 登录/注册页面
 │   ├── css/style.css           # 样式
 │   └── js/app.js               # 前端逻辑
+├── reflect/                    # 反思模块（定时唤醒 Agent）
+│   ├── scheduler.py            # 定时任务调度器
+│   ├── autonomous.py           # 自主运行（用户离开 30 分钟触发）
+│   ├── goal_mode.py            # 目标模式反思
+│   └── agent_team_worker.py    # BBS 接单 worker
 ├── skills/                     # Python 技能层
 │   ├── bridge.py               # 技能桥接基础
 │   └── test_skill.py           # 测试技能
+├── memory/                     # 记忆存储目录
+│   ├── L4_raw_sessions/        # 会话归档压缩
+│   ├── autonomous_operation_sop/  # 自主运行 SOP
+│   └── skill_search/           # 技能搜索引擎
+├── docs/                       # 文档
+│   ├── GETTING_STARTED.md      # 入门指南
+│   ├── SETUP_FEISHU.md         # 飞书集成
+│   ├── installation.md         # 安装文档（英）
+│   └── installation_zh.md      # 安装文档（中）
+├── frontends/desktop/          # Tauri 桌面前端
 ├── assets/                     # 系统资源
 │   ├── sys_prompt.txt          # 中文系统提示词
 │   ├── sys_prompt_en.txt       # 英文系统提示词
 │   └── tools_schema.json       # 工具 Schema
-├── memory/                     # 记忆存储目录
 ├── test_malicious_code.py      # 安全测试用恶意代码样本
 ├── integration_test.go         # 集成测试
 ├── deploy.py                   # 服务器部署脚本
@@ -338,6 +384,105 @@ GenericAgent/
 ├── go.mod                      # Go 模块定义
 └── pyproject.toml              # Python 依赖定义
 ```
+
+---
+
+## Agent 高级能力
+
+GenericAgent 在基础 Agent 循环之上，实现了八项工程化能力，覆盖长会话、并发、中断、计划、目标、超时等场景。
+
+### 上下文管理（多级降级压缩）
+
+[internal/agent/context.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/agent/context.go) 实现四级降级链，避免单点失败导致上下文溢出：
+
+| 级别 | 策略 | 是否调 LLM | 说明 |
+|:---|:---|:---|:---|
+| L0 | microcompact | 否 | 裁剪超长 tool 结果，保留头部+尾部 |
+| L1 | session memory | 否 | 本地提取关键信息（文件路径、代码引用、决策） |
+| L2 | LLM 摘要 | 是 | 调用 LLM 生成结构化摘要 |
+| L3 | 硬截断 | 否 | 保留 system + 最近 N 轮原文 |
+
+- **递归守卫**：`recursionGuard` 防止 compact LLM 调用再次触发 compact
+- **分级警告**：warning(70%) / error(85%) / hard(95%) 三级阈值
+- **Token 估算**：中英文混合 + 工具调用 JSON + 图片附件精确估算
+
+### 任务持久化
+
+[internal/task/store.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/task/store.go) 将任务状态序列化到磁盘：
+
+```
+data/tasks/<taskID>/
+├── state.json        # 任务元数据（状态/类型/时间戳/目标）
+├── messages.json     # 消息历史
+├── output.log        # 输出日志
+└── plans/plan-<id>.md # 计划文件
+```
+
+- **原子写**：tmp + rename 保证状态文件一致性
+- **内容替换**：`ContentReplacementState` 外置存储大 tool 结果
+- **启动恢复**：`Restore()` 扫描磁盘，将 running 任务标记为 failed
+
+### 并发能力
+
+[internal/task/runtime.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/task/runtime.go) 管理多任务并发：
+
+- **任务类型**：main / subagent（同步阻塞）/ teammate（异步协作）/ remote / monitor
+- **隔离模式**：none（共享目录）/ worktree（git 独立工作树）
+- **Abort 控制**：`context.Context` + `CombinedAbortSignal`（signal + timeout 组合）
+- **订阅机制**：每个任务通过 channel 广播 `DisplayItem` 给前端
+
+### 子任务编排
+
+[internal/task/message_router.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/task/message_router.go) 实现跨 agent 通信：
+
+- **寻址**：`to="all"` 广播 / `to="<name>"` 定向
+- **Team 管理**：teamName → name → task 三层映射
+- **shutdown 协议**：`[shutdown_request]` / `[shutdown_response]` 优雅关闭
+- **消息 UI cap**：`TeammateMessagesUICap=50` 防止 inbox 内存爆炸
+- **CacheSafeParams**：fork 子任务时对齐 model/systemPrompt/temperature/maxTokens，共享 LLM 缓存前缀
+
+### 中断恢复
+
+[internal/task/recovery.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/task/recovery.go) 处理进程崩溃后的状态重建：
+
+- **孤儿消息过滤**：清理无 tool_result 的 tool_use、纯 thinking 消息、空白消息
+- **内容还原**：从 `ContentReplacementState` 还原被压缩的 tool 结果
+- **Transcript 重建**：从历史消息恢复目标追踪器和计划文件状态
+- **Worktree 清理**：检测并清理 stale worktree
+
+### 计划模式
+
+[internal/agent/plan.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/agent/plan.go) 实现计划提交-审批工作流：
+
+1. Agent 调用 `PlanSubmit` 提交计划文本
+2. loop.go 阻塞等待 `waitForPlanApproval()` 信号
+3. 用户审批通过 → 继续执行；拒绝 → 退出并返回 `PLAN_REJECTED`
+4. 计划持久化到 `plans/plan-<taskID>.md`，供后续引用
+5. `AllowedPrompts` 定义计划允许执行的命令前缀
+
+### 目标追踪
+
+[internal/agent/goal.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/agent/goal.go) 实现目标状态机：
+
+| 状态 | 行为 |
+|:---|:---|
+| active | 每 N 轮注入目标提醒（默认 5 轮） |
+| paused | 暂停提醒，可恢复 |
+| done | 注入完成确认 |
+| failed | 注入失败原因 |
+
+- **LLM 完成判定**：`EvaluateCompletionWithLLM` 调用 LLM 判断目标是否达成（45s 超时）
+- **周期提醒**：`ShouldRemind` 检查轮次间隔，避免每轮都注入
+- **Transcript 恢复**：`RestoreFromTranscript` 从历史消息重建目标状态
+
+### 超时控制
+
+[internal/task/timeout.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/task/timeout.go) 实现多层超时：
+
+- **空闲超时**：`IdleTimeoutMonitor` 长时间无活动自动暂停任务
+- **组合信号**：`CombinedAbortSignal` 合并用户取消 + 超时信号
+- **优雅关闭**：grace period 等待清理 + shutdown timeout 强制退出
+- **任务时长**：`MaxDuration` + `time.AfterFunc` 限制单任务最大运行时间
 
 ---
 
@@ -412,6 +557,11 @@ Go 引擎内置以下工具，通过 `ToolRouter.Dispatch()` 路由：
 | `web_scan` | 网页感知（需 Python TMWebDriver） | Python 桥接 |
 | `web_execute_js` | 浏览器 JS 执行（需 Python TMWebDriver） | Python 桥接 |
 | `update_working_checkpoint` | 更新短期工作记忆 | Go 原生 |
+| `goal_set` | 设置目标（启动目标追踪状态机） | Go 原生 |
+| `goal_update` | 更新目标状态（pause/resume/complete/fail） | Go 原生 |
+| `plan_submit` | 提交执行计划（触发审批工作流） | Go 原生 |
+| `task_spawn` | 创建子任务（subagent/teammate，支持 worktree 隔离） | Go 原生 |
+| `task_message` | 跨 agent 通信（teammate 消息路由） | Go 原生 |
 
 ---
 
@@ -453,6 +603,45 @@ if __name__ == "__main__":
 ```
 skill_run({"skill": "my_skill", "param1": "value1"})
 ```
+
+---
+
+## Reflect 反思模块
+
+`reflect/` 目录包含定时唤醒 Agent 的反思脚本，由调度器周期性触发：
+
+| 脚本 | 触发周期 | 说明 |
+|:---|:---|:---|
+| [scheduler.py](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/reflect/scheduler.py) | 120s | 定时任务调度器，扫描 `sche_tasks/` 目录执行 cron 任务 |
+| [autonomous.py](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/reflect/autonomous.py) | 1800s | 自主运行：用户离开 30 分钟后触发自动任务 |
+| [goal_mode.py](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/reflect/goal_mode.py) | — | 目标模式反思：检查目标进度 |
+| [agent_team_worker.py](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/reflect/agent_team_worker.py) | 60s | BBS 接单 worker：轮询新帖并唤醒 Agent |
+
+### 反思脚本协议
+
+每个反思脚本需定义：
+
+```python
+INTERVAL = 60      # 触发周期（秒）
+ONCE = False       # 是否只执行一次
+
+def check():
+    """返回字符串则唤醒 Agent 并注入该文本；返回 None 不唤醒；返回 '/exit' 退出"""
+    return "[REFLECT] 检测到新任务，请处理"
+
+def init(args):
+    """可选：初始化配置（接收 agent_team_setting.json）"""
+    pass
+```
+
+### 定时任务调度
+
+`scheduler.py` 扫描 `sche_tasks/` 目录下的 JSON 任务文件，支持：
+
+- **repeat 模式**：once / daily / weekday / weekly / monthly / every_N
+- **冷却防漂移**：冷却时间略短于实际周期
+- **最大延迟窗口**：超过 `DEFAULT_MAX_DELAY=6` 小时不触发
+- **端口锁**：bind 45762 端口防止重复启动
 
 ---
 
