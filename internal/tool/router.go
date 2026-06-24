@@ -629,6 +629,30 @@ func (r *Router) doSkillRun(args map[string]any, response *llm.Response) *agent.
 
 	skillPath := filepath.Join(r.SkillDir, skillName+".py")
 	if _, err := os.Stat(skillPath); err != nil {
+		// 纯提示词 skill fallback: 无 .py 但有 SKILL.md 的目录
+		skillMdPath := filepath.Join(r.SkillDir, skillName, "SKILL.md")
+		if mdData, mdErr := os.ReadFile(skillMdPath); mdErr == nil {
+			action := strArg(args, "action", "")
+			fileName := strArg(args, "file", "")
+			// read_file 读取 SKILL.md 或目录内其他文件
+			if action == "read_file" || action == "read_md" || action == "info" || action == "" {
+				targetPath := skillMdPath
+				if fileName != "" && fileName != "SKILL.md" {
+					targetPath = filepath.Join(r.SkillDir, skillName, fileName)
+				}
+				if content, fErr := os.ReadFile(targetPath); fErr == nil {
+					return &agent.StepOutcome{
+						Data:       map[string]any{"status": "success", "content": string(content), "skill": skillName, "type": "prompt"},
+						NextPrompt: "\n",
+					}
+				}
+			}
+			// 其他 action: 返回 SKILL.md 内容供 LLM 参考后自行执行
+			return &agent.StepOutcome{
+				Data:       map[string]any{"status": "success", "content": string(mdData), "skill": skillName, "type": "prompt", "note": "提示词技能, 请阅读 SKILL.md 后按指导执行 (可能需要 code_run/bash 调用外部命令)"},
+				NextPrompt: "\n",
+			}
+		}
 		return &agent.StepOutcome{
 			Data:       map[string]any{"status": "error", "msg": fmt.Sprintf("Skill not found: %s", skillName)},
 			NextPrompt: "\n",

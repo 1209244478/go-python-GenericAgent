@@ -1039,6 +1039,7 @@ func buildSkillsSection(skillDir string) string {
 	}
 
 	var lines []string
+	processed := map[string]bool{}
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || entry.IsDir() {
@@ -1049,6 +1050,7 @@ func buildSkillsSection(skillDir string) string {
 		}
 
 		skillName := strings.TrimSuffix(name, ".py")
+		processed[skillName] = true
 		desc := ""
 
 		if dirs[skillName] {
@@ -1073,8 +1075,25 @@ func buildSkillsSection(skillDir string) string {
 		lines = append(lines, fmt.Sprintf("- **%s**: %s", skillName, desc))
 	}
 
+	// 纯提示词 skill: 含 SKILL.md 但无对应 .py 的目录
+	for dirName := range dirs {
+		if processed[dirName] {
+			continue
+		}
+		skillMd := filepath.Join(skillDir, dirName, "SKILL.md")
+		data, err := os.ReadFile(skillMd)
+		if err != nil {
+			continue
+		}
+		desc := extractSkillDescription(string(data))
+		if desc == "" {
+			desc = "提示词技能 (查阅 SKILL.md 获取用法)"
+		}
+		lines = append(lines, fmt.Sprintf("- **%s**: %s [提示词技能]", dirName, desc))
+	}
+
 	if len(lines) == 0 {
-		return "\n当前无已安装技能。将技能 .py 文件放入 skills 目录即可。\n"
+		return "\n当前无已安装技能。将技能 .py 文件或含 SKILL.md 的子目录放入 skills 目录即可。\n"
 	}
 
 	return "\n## 当前可用技能\n" + strings.Join(lines, "\n") + "\n"
