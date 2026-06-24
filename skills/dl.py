@@ -16,7 +16,7 @@ import sys
 from enum import Enum
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, Dict, List
 from urllib.parse import urlparse
 from loguru import logger
 
@@ -30,7 +30,7 @@ PLAYLIST_LIMIT = 30
 HERE = Path(__file__).parent
 
 
-def get_dir(candidates: list[str], default: Path = HERE) -> Path:
+def get_dir(candidates: List[str], default: Path = HERE) -> Path:
     for candidate in candidates:
         if candidate:
             path = Path(candidate).expanduser().resolve()
@@ -98,7 +98,7 @@ class Media:
 
 class Video(Media):
 
-    def build_options(self, options) -> dict[str, Any]:
+    def build_options(self, options) -> Dict[str, Any]:
         options.update({
             "format": "bestvideo[vcodec^=avc1]+bestaudio/best",
             "max_filesize": MAX_VIDEO_SIZE,
@@ -119,7 +119,7 @@ class Video(Media):
 
 class Music(Video):
 
-    def build_options(self, options) -> dict[str, Any]:
+    def build_options(self, options) -> Dict[str, Any]:
         options.update({
             "format": "bestaudio/best",
             "max_filesize": MAX_AUDIO_SIZE,
@@ -147,7 +147,7 @@ class Music(Video):
 class Single:
     is_playlist = False
 
-    def build_options(self, options) -> dict[str, Any]:
+    def build_options(self, options) -> Dict[str, Any]:
         options.update({
             "noplaylist": True,
             "outtmpl": {"default": "%(title).240B.%(ext)s"},
@@ -172,7 +172,7 @@ class Single:
 class Playlist(Single):
     is_playlist = True
 
-    def build_options(self, options) -> dict[str, Any]:
+    def build_options(self, options) -> Dict[str, Any]:
         options.update({
             "noplaylist": False,
             "outtmpl": {"default": "%(playlist_title)s/%(title).240B.%(ext)s"},
@@ -212,7 +212,7 @@ class Downloader:
         self.media = None
         self.mode = None
 
-    def detect_kind(self, info: dict[str, Any]) -> MediaKind:
+    def detect_kind(self, info: Dict[str, Any]) -> MediaKind:
         host = (urlparse(self.url).hostname or "").lower()
         if "music." in host:
             return MediaKind.MUSIC
@@ -230,7 +230,7 @@ class Downloader:
 
         return MediaKind.VIDEO
 
-    def detect_playlist(self, info: dict[str, Any]) -> bool:
+    def detect_playlist(self, info: Dict[str, Any]) -> bool:
         if "/playlist?" in self.url.lower():
             return True
         entry_type = info.get("_type")
@@ -240,7 +240,7 @@ class Downloader:
             return True
         return bool(info.get("playlist_count"))
 
-    def extract_info(self) -> dict[str, Any]:
+    def extract_info(self) -> Dict[str, Any]:
         probe_opts = {
             "quiet": True,
             "skip_download": True,
@@ -258,7 +258,7 @@ class Downloader:
 
         return info
 
-    def get_media_kind(self, info: dict[str, Any]) -> MediaKind:
+    def get_media_kind(self, info: Dict[str, Any]) -> MediaKind:
         if self.music:
             return MediaKind.MUSIC
         if self.video:
@@ -301,7 +301,7 @@ class Downloader:
         self.mode.build_options(options)
         return options
 
-    def download(self, options: dict[str, Any]) -> None:
+    def download(self, options: Dict[str, Any]) -> None:
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([self.url])
         return self.move_to_out_dir()
