@@ -884,6 +884,8 @@ func (h *Handler) ListSkills(c *gin.Context) {
 		Name        string                 `json:"name"`
 		Description string                 `json:"description"`
 		HasDir      bool                   `json:"has_dir"`
+		IsPrompt    bool                   `json:"is_prompt"`
+		WhenToUse   string                 `json:"when_to_use,omitempty"`
 		Templates   []map[string]any       `json:"templates,omitempty"`
 	}
 
@@ -902,6 +904,7 @@ func (h *Handler) ListSkills(c *gin.Context) {
 		}
 	}
 
+	processed := map[string]bool{}
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
@@ -917,6 +920,7 @@ func (h *Handler) ListSkills(c *gin.Context) {
 		}
 
 		skillName := strings.TrimSuffix(name, ".py")
+		processed[skillName] = true
 		info := SkillInfo{
 			Name:   skillName,
 			HasDir: dirs[skillName],
@@ -927,11 +931,11 @@ func (h *Handler) ListSkills(c *gin.Context) {
 		}
 
 		if dirs[skillName] {
-			skillMd := filepath.Join(h.skillDir, skillName, "SKILL.md")
-			if data, err := os.ReadFile(skillMd); err == nil {
-				if desc := extractSkillDescription(string(data)); desc != "" {
-					info.Description = desc
+			if meta := loadSkillMeta(h.skillDir, skillName); meta != nil {
+				if meta.Description != "" {
+					info.Description = meta.Description
 				}
+				info.WhenToUse = meta.WhenToUse
 			}
 			indexFile := filepath.Join(h.skillDir, skillName, "index.json")
 			if data, err := os.ReadFile(indexFile); err == nil {
@@ -954,6 +958,28 @@ func (h *Handler) ListSkills(c *gin.Context) {
 			}
 		}
 
+		skills = append(skills, info)
+	}
+
+	// 纯提示词 skill: 含 SKILL.md 但无对应 .py 的目录
+	for dirName := range dirs {
+		if processed[dirName] {
+			continue
+		}
+		meta := loadSkillMeta(h.skillDir, dirName)
+		if meta == nil {
+			continue
+		}
+		info := SkillInfo{
+			Name:        dirName,
+			HasDir:      true,
+			IsPrompt:    true,
+			Description: meta.Description,
+			WhenToUse:   meta.WhenToUse,
+		}
+		if info.Description == "" {
+			info.Description = "提示词技能 (查阅 SKILL.md)"
+		}
 		skills = append(skills, info)
 	}
 
