@@ -54,7 +54,12 @@ func (pf *PlanFile) Save(content string) error {
 		content,
 	)
 
-	return os.WriteFile(pf.filePath, []byte(planContent), 0644)
+	// 原子写入: 先写临时文件，再 rename，避免写一半崩溃导致文件损坏
+	tmpPath := pf.filePath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(planContent), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, pf.filePath)
 }
 
 // Load 从文件加载计划

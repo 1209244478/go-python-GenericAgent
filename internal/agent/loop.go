@@ -181,14 +181,25 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 		}
 
 		var response *llm.Response
-		streamCh, err := a.Client.ChatStream(llm.ChatParams{
-			Messages:    messages,
-			Tools:       a.ToolsSchema,
-			MaxTokens:   a.Client.MaxTokens,
-			Temperature: a.Client.Temperature,
-		})
-		if err != nil {
-			ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("Error: %v", err), Source: "error"}
+		var streamCh <-chan llm.StreamChunk
+		var streamErr error
+		for retry := 0; retry < 3; retry++ {
+			streamCh, streamErr = a.Client.ChatStream(llm.ChatParams{
+				Messages:    messages,
+				Tools:       a.ToolsSchema,
+				MaxTokens:   a.Client.MaxTokens,
+				Temperature: a.Client.Temperature,
+			})
+			if streamErr == nil {
+				break
+			}
+			if retry < 2 {
+				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("⚠️ LLM 连接失败 (%v)，%d秒后重试...", streamErr, retry+1), Source: "retry"}
+				time.Sleep(time.Duration(retry+1) * time.Second)
+			}
+		}
+		if streamErr != nil {
+			ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("Error: %v", streamErr), Source: "error"}
 			break
 		}
 

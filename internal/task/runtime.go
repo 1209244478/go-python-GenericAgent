@@ -235,29 +235,45 @@ func (r *Runtime) runTask(t *Task, cfg TaskConfig) {
 				Source:  "plan_paused",
 			})
 
-			// 等待审批
-			approved := <-t.planApproval
-			t.State.Status = StatusRunning
-			t.State.PendingPlan = ""
-			r.store.Save(t.State)
+			// 等待审批 (带超时，默认 10 分钟)
+			planTimeout := 10 * time.Minute
+			select {
+			case approved := <-t.planApproval:
+				t.State.Status = StatusRunning
+				t.State.PendingPlan = ""
+				r.store.Save(t.State)
 
-			if !approved {
+				if !approved {
+					t.State.Status = StatusKilled
+					t.State.Error = "plan rejected"
+					now := time.Now()
+					t.State.EndTime = &now
+					r.store.Save(t.State)
+					r.broadcast(t, agent.DisplayItem{Done: true, Source: "task_end"})
+					return
+				}
+
+				// 审批通过, 通知 agent 继续
+				t.Agent.ApprovePlan()
+				r.broadcast(t, agent.DisplayItem{
+					Turn:    item.Turn,
+					Content: "✅ 计划已批准，继续执行...",
+					Source:  "plan_approved",
+				})
+			case <-time.After(planTimeout):
 				t.State.Status = StatusKilled
-				t.State.Error = "plan rejected"
+				t.State.Error = "plan approval timeout"
 				now := time.Now()
 				t.State.EndTime = &now
 				r.store.Save(t.State)
+				r.broadcast(t, agent.DisplayItem{
+					Turn:    item.Turn,
+					Content: fmt.Sprintf("⏰ 计划审批超时 (%v)，任务已终止", planTimeout),
+					Source:  "plan_timeout",
+				})
 				r.broadcast(t, agent.DisplayItem{Done: true, Source: "task_end"})
 				return
 			}
-
-			// 审批通过, 通知 agent 继续
-			t.Agent.ApprovePlan()
-			r.broadcast(t, agent.DisplayItem{
-				Turn:    item.Turn,
-				Content: "✅ 计划已批准，继续执行...",
-				Source:  "plan_approved",
-			})
 		}
 	}
 

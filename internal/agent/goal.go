@@ -258,16 +258,49 @@ func (g *GoalTracker) EvaluateCompletionWithLLM(client *llm.Client, recentMessag
 		if res.err != nil {
 			return false, "", res.err
 		}
-		// 解析结果
-		completed := strings.Contains(res.text, "完成: 是") ||
-			strings.Contains(res.text, "完成:是") ||
-			strings.Contains(res.text, "是\n")
+		// 解析结果 — 容忍格式变体 (中英文冒号、空格、换行差异)
+		lowerText := strings.ToLower(res.text)
+		completed := false
+
+		// 优先检查 "完成" 行的值
+		for _, line := range strings.Split(res.text, "\n") {
+			lower := strings.ToLower(strings.TrimSpace(line))
+			if !strings.HasPrefix(lower, "完成") {
+				continue
+			}
+			// 去掉 "完成" 前缀后，兼容中英文冒号
+			rest := strings.TrimSpace(line[len("完成"):])
+			rest = strings.TrimPrefix(rest, ":")
+			rest = strings.TrimPrefix(rest, "：")
+			rest = strings.ToLower(strings.TrimSpace(rest))
+			if strings.HasPrefix(rest, "是") || rest == "yes" || rest == "true" {
+				completed = true
+			}
+			break
+		}
+
+		// 降级: 如果没有 "完成:" 行，检查全文是否包含明确的肯定词
+		if !completed {
+			if strings.Contains(lowerText, "目标已完成") ||
+				strings.Contains(lowerText, "已完成") ||
+				strings.Contains(lowerText, "goal completed") ||
+				strings.Contains(lowerText, "completed: yes") {
+				completed = true
+			}
+		}
+
+		// 提取理由
 		reason := ""
 		for _, line := range strings.Split(res.text, "\n") {
-			if strings.HasPrefix(line, "理由:") || strings.HasPrefix(line, "理由：") {
-				reason = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "理由:"), "理由："))
-				break
+			lower := strings.ToLower(strings.TrimSpace(line))
+			if !strings.HasPrefix(lower, "理由") {
+				continue
 			}
+			rest := strings.TrimSpace(line[len("理由"):])
+			rest = strings.TrimPrefix(rest, ":")
+			rest = strings.TrimPrefix(rest, "：")
+			reason = strings.TrimSpace(rest)
+			break
 		}
 		return completed, reason, nil
 	case <-time.After(g.hookTimeout):

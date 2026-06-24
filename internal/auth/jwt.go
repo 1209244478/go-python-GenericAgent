@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,9 +19,15 @@ type JWTManager struct {
 	expiration time.Duration
 }
 
-func NewJWTManager(secret string, expirationHours int) *JWTManager {
-	if secret == "" {
-		secret = "genericagent-default-jwt-secret-change-me"
+// ErrInsecureJWTSecret 表示 JWT secret 为空或为已知默认值，存在 token 伪造风险
+var ErrInsecureJWTSecret = errors.New("insecure JWT secret: must be non-empty and not the known default value (configure jwt_secret in server.json or JWT_SECRET env)")
+
+// defaultJWTSecret 已知的不安全默认值，仅用于比对拒绝
+const defaultJWTSecret = "genericagent-default-jwt-secret-change-me"
+
+func NewJWTManager(secret string, expirationHours int) (*JWTManager, error) {
+	if secret == "" || secret == defaultJWTSecret {
+		return nil, ErrInsecureJWTSecret
 	}
 	if expirationHours <= 0 {
 		expirationHours = 72
@@ -28,7 +35,7 @@ func NewJWTManager(secret string, expirationHours int) *JWTManager {
 	return &JWTManager{
 		secret:     []byte(secret),
 		expiration: time.Duration(expirationHours) * time.Hour,
-	}
+	}, nil
 }
 
 func (m *JWTManager) GenerateToken(userID int64, email string) (string, error) {

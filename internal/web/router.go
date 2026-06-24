@@ -5,7 +5,13 @@ import "github.com/gin-gonic/gin"
 func SetupRouter(h *Handler) *gin.Engine {
 	r := gin.Default()
 
-	r.Use(CORSMiddleware())
+	// CORS: 开发环境允许 localhost，生产环境应通过配置指定确切域名
+	r.Use(CORSMiddleware([]string{
+		"http://localhost:8080", "http://127.0.0.1:8080",
+		"http://localhost:3000", "http://127.0.0.1:3000",
+	}))
+	// 限制请求体 32MB (上传文件除外，upload 路由单独处理)
+	r.Use(BodyLimitMiddleware(32 << 20))
 
 	r.Static("/static", "./web")
 	r.StaticFile("/", "./web/app.html")

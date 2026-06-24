@@ -33,15 +33,7 @@ type Handler struct {
 	rootDir   string
 	skillDir  string
 	upgrader  websocket.Upgrader
-	sessions  map[int64]*Session
 	taskRT    *task.Runtime
-}
-
-type Session struct {
-	Agent     *agent.Agent
-	Router    *tool.Router
-	Cancel    func()
-	CreatedAt time.Time
 }
 
 func NewHandler(
@@ -116,7 +108,6 @@ func NewHandler(
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		sessions: make(map[int64]*Session),
 		taskRT:   taskRT,
 	}
 }

@@ -7,6 +7,17 @@ import (
 	"strings"
 )
 
+// hasPathPrefix 检查 path 是否以 prefix 为前缀（路径分隔符感知，大小写不敏感）
+// 在 Windows 等不区分大小写的文件系统上，strings.HasPrefix 可能被绕过
+func hasPathPrefix(path, prefix string) bool {
+	path = filepath.Clean(path)
+	prefix = filepath.Clean(prefix)
+	if strings.EqualFold(path, prefix) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(path), strings.ToLower(prefix)+string(filepath.Separator))
+}
+
 type Manager struct {
 	dataDir  string
 	skillDir string
@@ -37,7 +48,7 @@ func (m *Manager) ResolvePath(userID int64, path string) (string, error) {
 
 	userDir := m.UserDir(userID)
 	fullPath := filepath.Join(userDir, cleaned)
-	if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(userDir)) {
+	if !hasPathPrefix(fullPath, userDir) {
 		return "", fmt.Errorf("access denied: path outside workspace")
 	}
 
@@ -55,7 +66,7 @@ func (m *Manager) ResolveSkillPath(path string) (string, error) {
 	}
 
 	fullPath := filepath.Join(m.skillDir, cleaned)
-	if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(m.skillDir)) {
+	if !hasPathPrefix(fullPath, m.skillDir) {
 		return "", fmt.Errorf("access denied: path outside skill directory")
 	}
 
@@ -67,7 +78,7 @@ func (m *Manager) IsSkillPath(path string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.HasPrefix(filepath.Clean(abs), filepath.Clean(m.skillDir))
+	return hasPathPrefix(abs, m.skillDir)
 }
 
 func (m *Manager) CanWrite(userID int64, path string) bool {
@@ -76,7 +87,7 @@ func (m *Manager) CanWrite(userID int64, path string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.HasPrefix(filepath.Clean(abs), filepath.Clean(userDir))
+	return hasPathPrefix(abs, userDir)
 }
 
 func (m *Manager) CanRead(userID int64, path string) bool {
@@ -88,8 +99,10 @@ func (m *Manager) CanRead(userID int64, path string) bool {
 
 func (m *Manager) ListUserFiles(userID int64) ([]FileInfo, error) {
 	userDir := m.UserDir(userID)
-	return listFiles(userDir, userDir)
+	return listFilesRecursive(userDir, userDir, 0)
 }
+
+const maxListDepth = 5 // 限制递归深度，防止目录爆炸
 
 type FileInfo struct {
 	Name    string `json:"name"`
@@ -99,7 +112,7 @@ type FileInfo struct {
 	ModTime string `json:"mod_time"`
 }
 
-func listFiles(root string, prefix string) ([]FileInfo, error) {
+func listFilesRecursive(root string, prefix string, depth int) ([]FileInfo, error) {
 	var files []FileInfo
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -122,6 +135,14 @@ func listFiles(root string, prefix string) ([]FileInfo, error) {
 			ModTime: info.ModTime().Format("2006-01-02 15:04:05"),
 		}
 		files = append(files, fi)
+
+		// 递归列出子目录 (限制深度)
+		if e.IsDir() && depth < maxListDepth {
+			subFiles, err := listFilesRecursive(filepath.Join(root, e.Name()), prefix, depth+1)
+			if err == nil {
+				files = append(files, subFiles...)
+			}
+		}
 	}
 	return files, nil
 }

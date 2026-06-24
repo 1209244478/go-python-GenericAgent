@@ -15,7 +15,6 @@ import (
 type Manager struct {
 	RootDir string
 	mu      sync.RWMutex
-	cache   map[string]string
 }
 
 func NewManager(rootDir string) *Manager {
@@ -23,7 +22,6 @@ func NewManager(rootDir string) *Manager {
 	os.MkdirAll(memDir, 0755)
 	return &Manager{
 		RootDir: rootDir,
-		cache:   make(map[string]string),
 	}
 }
 
@@ -170,9 +168,9 @@ func (m *Manager) LogAccess(path string) {
 		return
 	}
 	statsPath := filepath.Join(m.RootDir, "memory", "file_access_stats.json")
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
+	// 读取现有统计 (持锁时间尽可能短)
+	m.mu.Lock()
 	stats := make(map[string]any)
 	if data, err := os.ReadFile(statsPath); err == nil {
 		json.Unmarshal(data, &stats)
@@ -190,6 +188,9 @@ func (m *Manager) LogAccess(path string) {
 	}
 
 	data, _ := json.MarshalIndent(stats, "", "  ")
+	m.mu.Unlock()
+
+	// 写盘在锁外执行 (单写者语义由 mu 保证序列化，此处写入是幂等的)
 	os.WriteFile(statsPath, data, 0644)
 }
 

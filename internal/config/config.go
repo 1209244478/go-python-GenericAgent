@@ -203,11 +203,14 @@ func (c *Config) ReloadIfChanged() bool {
 
 	if changed {
 		newCfg, err := Load()
-		if err == nil {
+		if err == nil && globalCfg != nil {
+			// 加锁保护 globalCfg 的并发更新
+			globalCfg.mu.Lock()
 			globalCfg.LLMs = newCfg.LLMs
 			globalCfg.Mixins = newCfg.Mixins
 			globalCfg.path = newCfg.path
 			globalCfg.mtime = newCfg.mtime
+			globalCfg.mu.Unlock()
 		}
 	}
 	return changed

@@ -2,8 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"strconv"
 	"sync"
 	"time"
@@ -87,10 +88,15 @@ func (s *CodeStore) Client() *redis.Client {
 }
 
 func (s *CodeStore) GenerateCode(email string) (string, error) {
-	code := fmt.Sprintf("%06d", rand.Intn(1000000))
+	// 使用 crypto/rand 生成验证码，避免可预测性
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", fmt.Errorf("generate code: %w", err)
+	}
+	code := fmt.Sprintf("%06d", n.Int64())
 	key := s.key(email)
 
-	err := s.client.Set(context.Background(), key, code, s.ttl).Err()
+	err = s.client.Set(context.Background(), key, code, s.ttl).Err()
 	if err != nil {
 		s.fallback.set(key, code, s.ttl)
 	}

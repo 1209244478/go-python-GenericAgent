@@ -65,6 +65,10 @@ type ContextManager struct {
 	MicrocompactToolResult int // 单个工具结果超过此 token 数则裁剪 (默认 4000)
 	MicrocompactAssistant  int // 单个 assistant 消息超过此 token 数则分段裁剪 (默认 6000)
 
+	// thinking 块裁剪: 保留最近 N 轮 thinking, 清除更早的
+	// 参考 cc-haha clear_thinking_20251015: 旧 thinking 块对后续生成无价值
+	KeepThinkingRounds int // 保留最近几轮 thinking (默认 2, 0=不裁剪)
+
 	// 递归守卫: 防止 compact 源的 LLM 调用再次触发 compact
 	// 参考 cc-haha autoCompact.ts:165 对 session_memory/compact 源的守卫
 	recursionGuard atomic.Bool
@@ -199,6 +203,7 @@ func NewContextManager(client *llm.Client) *ContextManager {
 		MicrocompactToolResult: 4000,
 		MicrocompactAssistant:  6000,
 		KeepRecent:             4, // 保留最近4条消息(约2轮)
+		KeepThinkingRounds:     2, // 保留最近2轮 thinking, 清除更早的
 		calibrationFactor:      1.0,
 		cachePrefixStable:      2, // 默认保留 system + 首条 user 作为缓存前缀
 	}
@@ -273,6 +278,26 @@ func (cm *ContextManager) estimateRawTokens(messages []llm.Message) int {
 	return total
 }
 
+// CountTokensPrecise 调用 LLM provider 的 count_tokens API 获取精确 token 数
+// 当 API 不可用或调用失败时, 降级到本地估算 (EstimateTokens)
+// 参考 cc-haha tokenEstimation.ts: countTokensViaAPI + 本地估算降级
+// 参数:
+//   - messages: 待计数的消息列表
+// 返回:
+//   - precise: 是否使用了精确计数 (true=API, false=本地估算)
+//   - tokens: token 数
+func (cm *ContextManager) CountTokensPrecise(messages []llm.Message) (precise bool, tokens int) {
+	if cm.Client == nil {
+		return false, cm.EstimateTokens(messages)
+	}
+	count, err := cm.Client.CountTokens(messages)
+	if err != nil || count <= 0 {
+		// 降级到本地估算
+		return false, cm.EstimateTokens(messages)
+	}
+	return true, count
+}
+
 // GetCalibrationInfo 获取校准信息 (调试用)
 func (cm *ContextManager) GetCalibrationInfo() (factor float64, samples int, lastReal int) {
 	cm.calibrationMu.RLock()
@@ -281,17 +306,13 @@ func (cm *ContextManager) GetCalibrationInfo() (factor float64, samples int, las
 }
 
 // estimateMessageTokens 估算单条消息的 token 数
+// 增强: 处理多模态 ContentBlock 数组 (图片/document/thinking/tool_use/tool_result)
+// 参考 cc-haha tokenEstimation.ts: image=2000, document=2000, thinking 单独估算
 func (cm *ContextManager) estimateMessageTokens(m llm.Message) int {
 	tokens := 0
 
-	// content 部分
-	if content, ok := m.Content.(string); ok {
-		tokens += estimateStringTokens(content)
-	} else if m.Content != nil {
-		if data, err := json.Marshal(m.Content); err == nil {
-			tokens += estimateStringTokens(string(data))
-		}
-	}
+	// content 部分: 支持字符串和 ContentBlock 数组两种形态
+	tokens += estimateContentTokens(m.Content)
 
 	// tool_calls 部分 (含完整 arguments JSON)
 	for _, tc := range m.ToolCalls {
@@ -332,6 +353,106 @@ func estimateStringTokens(s string) int {
 	// 英文为主，按空格分词
 	wordCount := strings.Fields(s)
 	return int(float64(len(wordCount)) * 1.3)
+}
+
+// estimateContentTokens 估算 Content 字段的 token 数
+// 支持: string / []ContentBlock / []map[string]any / []any (多模态)
+// 参考 cc-haha tokenEstimation.ts:
+//   - image: ~2000 tokens (含 base64 编码开销)
+//   - document: ~2000 tokens
+//   - thinking: 按 text 估算 (推理链内容)
+//   - tool_use: name + input JSON
+//   - tool_result: content 估算
+func estimateContentTokens(content any) int {
+	if content == nil {
+		return 0
+	}
+
+	// 形态 1: 纯字符串
+	if s, ok := content.(string); ok {
+		return estimateStringTokens(s)
+	}
+
+	// 形态 2: []llm.ContentBlock (代码构造)
+	if blocks, ok := content.([]llm.ContentBlock); ok {
+		total := 0
+		for _, b := range blocks {
+			total += estimateContentBlockTokens(b.Type, b.Text, b.Name, b.Input, b.Thinking)
+		}
+		return total
+	}
+
+	// 形态 3: []map[string]any (JSON 解析)
+	if blocks, ok := content.([]map[string]any); ok {
+		total := 0
+		for _, b := range blocks {
+			total += estimateContentBlockFromMap(b)
+		}
+		return total
+	}
+
+	// 形态 4: []any (通用 JSON 解析)
+	if blocks, ok := content.([]any); ok {
+		total := 0
+		for _, b := range blocks {
+			if m, ok := b.(map[string]any); ok {
+				total += estimateContentBlockFromMap(m)
+			} else if s, ok := b.(string); ok {
+				total += estimateStringTokens(s)
+			}
+		}
+		return total
+	}
+
+	// 兜底: JSON 序列化后估算
+	if data, err := json.Marshal(content); err == nil {
+		return estimateStringTokens(string(data))
+	}
+	return 0
+}
+
+// estimateContentBlockTokens 估算单个 ContentBlock 的 token 数
+func estimateContentBlockTokens(blockType, text, name string, input map[string]any, thinking string) int {
+	switch blockType {
+	case "image":
+		// 图片: 固定估算 2000 token (参考 cc-haha, 含 base64 编码开销)
+		return 2000
+	case "document":
+		// 文档 (PDF 等): 固定估算 2000 token
+		return 2000
+	case "thinking":
+		// 推理链: 按 text + thinking 估算
+		return estimateStringTokens(text) + estimateStringTokens(thinking)
+	case "tool_use":
+		// 工具调用: name + input JSON + 结构开销
+		tokens := estimateStringTokens(name) + 8
+		if input != nil {
+			if data, err := json.Marshal(input); err == nil {
+				tokens += estimateStringTokens(string(data))
+			}
+		}
+		return tokens
+	case "tool_result":
+		// 工具结果: 按 text 估算
+		return estimateStringTokens(text)
+	default:
+		// 默认: text 类型
+		return estimateStringTokens(text)
+	}
+}
+
+// estimateContentBlockFromMap 从 map 估算 ContentBlock token 数
+func estimateContentBlockFromMap(b map[string]any) int {
+	blockType, _ := b["type"].(string)
+	text, _ := b["text"].(string)
+	name, _ := b["name"].(string)
+	thinking, _ := b["thinking"].(string)
+	input := b["input"]
+	var inputMap map[string]any
+	if m, ok := input.(map[string]any); ok {
+		inputMap = m
+	}
+	return estimateContentBlockTokens(blockType, text, name, inputMap, thinking)
 }
 
 // ShouldCompact 判断是否需要主动压缩 (proactive)
@@ -386,6 +507,14 @@ func (cm *ContextManager) Microcompact(messages []llm.Message) []llm.Message {
 	result := make([]llm.Message, len(messages))
 	copy(result, messages)
 
+	// thinking 块裁剪: 清除旧 thinking 块, 只保留最近 N 轮
+	// 参考 cc-haha clear_thinking_20251015: 旧 thinking 对后续生成无价值
+	if cm.KeepThinkingRounds > 0 {
+		if cleared := cm.clearOldThinking(result, cm.KeepThinkingRounds); cleared {
+			changed = true
+		}
+	}
+
 	for i, m := range result {
 		content, ok := m.Content.(string)
 		if !ok || content == "" {
@@ -399,7 +528,8 @@ func (cm *ContextManager) Microcompact(messages []llm.Message) []llm.Message {
 			if cm.MicrocompactToolResult <= 0 || tokens <= cm.MicrocompactToolResult {
 				continue
 			}
-			truncated := cm.truncateContent(content, tokens, cm.MicrocompactToolResult)
+			// P-stress: 优先保留错误/失败行 (FAIL/Error/panic), 这些对后续修复至关重要
+			truncated := cm.truncateToolResult(content, tokens, cm.MicrocompactToolResult)
 			if truncated != content {
 				result[i].Content = truncated
 				changed = true
@@ -441,6 +571,127 @@ func (cm *ContextManager) Microcompact(messages []llm.Message) []llm.Message {
 	return result
 }
 
+// clearOldThinking 清除旧的 thinking 块, 只保留最近 keepRounds 轮
+// thinking 块存在于 ContentBlock 数组中 (type=thinking)
+// 参考 cc-haha clear_thinking_20251015: 旧 thinking 块对后续生成无价值, 可安全删除
+// 返回是否有修改
+func (cm *ContextManager) clearOldThinking(messages []llm.Message, keepRounds int) bool {
+	if keepRounds <= 0 || len(messages) == 0 {
+		return false
+	}
+
+	// 统计含 thinking 块的 assistant 消息数, 标记需要清除的
+	thinkingIndices := []int{}
+	for i, m := range messages {
+		if m.Role != "assistant" {
+			continue
+		}
+		if hasThinkingBlock(m.Content) {
+			thinkingIndices = append(thinkingIndices, i)
+		}
+	}
+
+	// 需要清除的: 除最近 keepRounds 轮外的所有
+	if len(thinkingIndices) <= keepRounds {
+		return false
+	}
+	toClear := thinkingIndices[:len(thinkingIndices)-keepRounds]
+
+	changed := false
+	for _, idx := range toClear {
+		// hasThinkingBlock 已确认含 thinking 块, removeThinkingBlocks 一定会改变内容
+		messages[idx].Content = removeThinkingBlocks(messages[idx].Content)
+		changed = true
+	}
+	return changed
+}
+
+// hasThinkingBlock 检查 Content 是否含 thinking 类型的 ContentBlock
+func hasThinkingBlock(content any) bool {
+	if content == nil {
+		return false
+	}
+	// []llm.ContentBlock
+	if blocks, ok := content.([]llm.ContentBlock); ok {
+		for _, b := range blocks {
+			if b.Type == "thinking" {
+				return true
+			}
+		}
+		return false
+	}
+	// []map[string]any
+	if blocks, ok := content.([]map[string]any); ok {
+		for _, b := range blocks {
+			if t, ok := b["type"].(string); ok && t == "thinking" {
+				return true
+			}
+		}
+		return false
+	}
+	// []any
+	if blocks, ok := content.([]any); ok {
+		for _, b := range blocks {
+			if m, ok := b.(map[string]any); ok {
+				if t, ok := m["type"].(string); ok && t == "thinking" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// removeThinkingBlocks 从 Content 中移除 thinking 类型的 ContentBlock
+func removeThinkingBlocks(content any) any {
+	if content == nil {
+		return content
+	}
+	// []llm.ContentBlock
+	if blocks, ok := content.([]llm.ContentBlock); ok {
+		filtered := make([]llm.ContentBlock, 0, len(blocks))
+		for _, b := range blocks {
+			if b.Type != "thinking" {
+				filtered = append(filtered, b)
+			}
+		}
+		if len(filtered) == 0 {
+			return "" // 全部是 thinking, 返回空字符串
+		}
+		return filtered
+	}
+	// []map[string]any
+	if blocks, ok := content.([]map[string]any); ok {
+		filtered := make([]map[string]any, 0, len(blocks))
+		for _, b := range blocks {
+			if t, ok := b["type"].(string); !ok || t != "thinking" {
+				filtered = append(filtered, b)
+			}
+		}
+		if len(filtered) == 0 {
+			return ""
+		}
+		return filtered
+	}
+	// []any
+	if blocks, ok := content.([]any); ok {
+		filtered := make([]any, 0, len(blocks))
+		for _, b := range blocks {
+			if m, ok := b.(map[string]any); ok {
+				if t, ok := m["type"].(string); ok && t == "thinking" {
+					continue
+				}
+			}
+			filtered = append(filtered, b)
+		}
+		if len(filtered) == 0 {
+			return ""
+		}
+		return filtered
+	}
+	return content
+}
+
 // truncateContent 截断内容: 保留前 head% + 后 tail% + 中间省略标记
 func (cm *ContextManager) truncateContent(content string, currentTokens, targetTokens int) string {
 	if currentTokens <= targetTokens {
@@ -457,6 +708,86 @@ func (cm *ContextManager) truncateContent(content string, currentTokens, targetT
 	return string(runes[:head]) +
 		fmt.Sprintf("\n...[truncated %d tokens]...\n", currentTokens-targetTokens) +
 		string(runes[len(runes)-tail:])
+}
+
+// truncateToolResult 裁剪工具输出, 优先保留错误/失败行
+// 参考 cc-haha: 工具输出中的 FAIL/Error/panic 行对后续修复至关重要
+func (cm *ContextManager) truncateToolResult(content string, currentTokens, targetTokens int) string {
+	if currentTokens <= targetTokens {
+		return content
+	}
+
+	// 提取错误行 (FAIL/Error/panic/exception/traceback 等)
+	errorLines := []string{}
+	// criticalLines: panic/traceback 等致命错误, 优先保留
+	criticalLines := []string{}
+	criticalKws := []string{"panic", "traceback", "fatal", "segfault"}
+	errorKws := []string{"fail", "error", "panic", "exception", "traceback", "undefined", "cannot", "nil pointer"}
+	for _, line := range strings.Split(content, "\n") {
+		lower := strings.ToLower(line)
+		isCritical := false
+		for _, kw := range criticalKws {
+			if strings.Contains(lower, kw) {
+				isCritical = true
+				break
+			}
+		}
+		for _, kw := range errorKws {
+			if strings.Contains(lower, kw) {
+				if isCritical {
+					criticalLines = append(criticalLines, line)
+				} else {
+					errorLines = append(errorLines, line)
+				}
+				break
+			}
+		}
+	}
+
+	// 常规裁剪 (保留首尾)
+	truncated := cm.truncateContent(content, currentTokens, targetTokens)
+
+	// 检查裁剪后丢失的错误行
+	missingCritical := []string{}
+	for _, el := range criticalLines {
+		if el == "" {
+			continue
+		}
+		if !strings.Contains(truncated, el) {
+			missingCritical = append(missingCritical, el)
+		}
+	}
+	missingErrors := []string{}
+	for _, el := range errorLines {
+		if el == "" {
+			continue
+		}
+		if !strings.Contains(truncated, el) {
+			missingErrors = append(missingErrors, el)
+		}
+	}
+
+	if len(missingCritical) == 0 && len(missingErrors) == 0 {
+		return truncated
+	}
+
+	// critical 行全部保留 (不限制数量), 普通错误行限制最后 10 行
+	if len(missingErrors) > 10 {
+		missingErrors = missingErrors[len(missingErrors)-10:]
+	}
+	var sb strings.Builder
+	sb.WriteString(truncated)
+	sb.WriteString("\n...[preserved error lines]...\n")
+	// 先写 critical (panic/traceback 等)
+	for _, el := range missingCritical {
+		sb.WriteString(el)
+		sb.WriteString("\n")
+	}
+	for _, el := range missingErrors {
+		sb.WriteString(el)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // SessionMemoryCompaction 会话记忆压缩: 本地提取关键信息构造摘要
@@ -637,6 +968,25 @@ func (cm *ContextManager) SessionMemoryCompaction(messages []llm.Message) []llm.
 		sb.WriteString("\n## 用户确认\n")
 		for i, c := range userConfirmations {
 			fmt.Fprintf(&sb, "%d. %s\n", i+1, c)
+		}
+	}
+	// P-stress: 工具调用记录 (之前被提取但未输出, 导致 file_patch 等信息丢失)
+	if len(toolCalls) > 0 {
+		// 去重
+		seen := make(map[string]bool)
+		unique := toolCalls[:0]
+		for _, tc := range toolCalls {
+			if !seen[tc] {
+				seen[tc] = true
+				unique = append(unique, tc)
+			}
+		}
+		if len(unique) > 10 {
+			unique = unique[len(unique)-10:]
+		}
+		sb.WriteString("\n## 使用工具\n")
+		for _, tc := range unique {
+			fmt.Fprintf(&sb, "- %s\n", tc)
 		}
 	}
 	if len(errors) > 0 {
@@ -1139,28 +1489,159 @@ func (cm *ContextManager) callCompactLLMWithHistory(messages []llm.Message, hist
 对话历史:
 %s`, historyPrompt, historyText.String())
 
-	// 使用非流式调用
-	ch, err := cm.Client.Chat(llm.ChatParams{
-		Messages: []llm.Message{
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   1024,
-		Temperature: 0,
-	})
-	if err != nil {
-		return "", err
+	// PTL 重试: compact 请求本身可能 prompt-too-long
+	// 参考 cc-haha compactConversation: 按 API-round 分组丢弃最旧消息, 最多 3 次
+	const maxPTLRetries = 3
+	currentMessages := messages
+	for attempt := 0; attempt <= maxPTLRetries; attempt++ {
+		// 使用非流式调用
+		ch, err := cm.Client.Chat(llm.ChatParams{
+			Messages: []llm.Message{
+				{Role: "user", Content: prompt},
+			},
+			MaxTokens:   1024,
+			Temperature: 0,
+		})
+		if err != nil {
+			// 检测 PTL 错误
+			if isPromptTooLongError(err) && attempt < maxPTLRetries {
+				// 丢弃最旧的一组消息 (一个 API round: user+assistant+tool)
+				truncated := cm.truncateHeadForPTLRetry(currentMessages, 1)
+				if len(truncated) == len(currentMessages) {
+					// 无法再截断, 返回错误
+					return "", err
+				}
+				currentMessages = truncated
+				// 重建 prompt (用截断后的消息)
+				historyText.Reset()
+				for _, m := range currentMessages {
+					historyText.WriteString(fmt.Sprintf("[%s]: ", m.Role))
+					if content, ok := m.Content.(string); ok {
+						historyText.WriteString(content)
+					}
+					historyText.WriteString("\n")
+				}
+				prompt = fmt.Sprintf(`请将以下对话历史压缩为简洁摘要，保留:
+1. 用户的核心目标和需求
+2. 已完成的关键操作和结果
+3. 待解决的问题和下一步
+4. 关键文件路径、变量名、状态
+删除冗余的工具输出细节和重复内容。摘要应控制在500字以内。
+%s
+对话历史:
+%s`, historyPrompt, historyText.String())
+				continue // 重试
+			}
+			return "", err
+		}
+
+		var result string
+		for chunk := range ch {
+			if chunk.Error != nil {
+				// 流中错误也检测 PTL
+				if isPromptTooLongError(chunk.Error) && attempt < maxPTLRetries {
+					truncated := cm.truncateHeadForPTLRetry(currentMessages, 1)
+					if len(truncated) == len(currentMessages) {
+						return "", chunk.Error
+					}
+					currentMessages = truncated
+					historyText.Reset()
+					for _, m := range currentMessages {
+						historyText.WriteString(fmt.Sprintf("[%s]: ", m.Role))
+						if content, ok := m.Content.(string); ok {
+							historyText.WriteString(content)
+						}
+						historyText.WriteString("\n")
+					}
+					prompt = fmt.Sprintf(`请将以下对话历史压缩为简洁摘要，保留:
+1. 用户的核心目标和需求
+2. 已完成的关键操作和结果
+3. 待解决的问题和下一步
+4. 关键文件路径、变量名、状态
+删除冗余的工具输出细节和重复内容。摘要应控制在500字以内。
+%s
+对话历史:
+%s`, historyPrompt, historyText.String())
+					goto retry
+				}
+				return "", chunk.Error
+			}
+			if chunk.Text != "" {
+				result += chunk.Text
+			}
+		}
+		return result, nil
+
+	retry:
+	}
+	return "", fmt.Errorf("compact failed after %d PTL retries", maxPTLRetries)
+}
+
+// truncateHeadForPTLRetry 丢弃最旧的 N 组消息 (一个 API round)
+// 一个 round = user + assistant + (tool)*, 保留 system 消息
+// 参考 cc-haha compactConversation: 按 API-round 分组丢弃
+func (cm *ContextManager) truncateHeadForPTLRetry(messages []llm.Message, rounds int) []llm.Message {
+	if rounds <= 0 || len(messages) == 0 {
+		return messages
 	}
 
-	var result string
-	for chunk := range ch {
-		if chunk.Error != nil {
-			return "", chunk.Error
-		}
-		if chunk.Text != "" {
-			result += chunk.Text
+	// 分离 system 和其他消息
+	var systemMsgs, otherMsgs []llm.Message
+	for _, m := range messages {
+		if m.Role == "system" {
+			systemMsgs = append(systemMsgs, m)
+		} else {
+			otherMsgs = append(otherMsgs, m)
 		}
 	}
-	return result, nil
+
+	// 计算要跳过的消息数 (每个 round 从 user 开始到下一个 user 前)
+	skip := 0
+	roundsFound := 0
+	for i, m := range otherMsgs {
+		if m.Role == "user" {
+			roundsFound++
+			if roundsFound > rounds {
+				break
+			}
+		}
+		skip = i + 1
+	}
+
+	if skip >= len(otherMsgs) {
+		// 全部被跳过, 无法再截断
+		return messages
+	}
+
+	result := make([]llm.Message, 0, len(systemMsgs)+len(otherMsgs)-skip)
+	result = append(result, systemMsgs...)
+	result = append(result, otherMsgs[skip:]...)
+	return result
+}
+
+// isPromptTooLongError 检测是否为 prompt-too-long 错误
+// 参考 cc-haha: 检测 "prompt is too long" / "context length" / HTTP 413
+func isPromptTooLongError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "prompt is too long") {
+		return true
+	}
+	if strings.Contains(msg, "context length") {
+		return true
+	}
+	if strings.Contains(msg, "maximum context") {
+		return true
+	}
+	if strings.Contains(msg, "too long") && strings.Contains(msg, "token") {
+		return true
+	}
+	if strings.Contains(msg, "http 413") {
+		return true
+	}
+	return false
 }
 
 // AddSnipTokensFreed 记录 snip 释放的 token 数

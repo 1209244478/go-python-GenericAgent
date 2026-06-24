@@ -253,8 +253,6 @@ func (s *UserStore) DeleteSession(userID, sessionID int64) error {
 }
 
 func (s *UserStore) EnsureDefaultSession(userID int64) (*Session, error) {
-	sess, err := s.GetSession(userID, 0)
-	_ = sess
 	rows, err := s.db.Query(
 		"SELECT id, user_id, name, created_at FROM sessions WHERE user_id = ? ORDER BY id LIMIT 1",
 		userID,

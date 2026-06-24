@@ -568,12 +568,24 @@ func (r *Router) doFilePatch(args map[string]any) *agent.StepOutcome {
 	}
 
 	updated := strings.Replace(fullText, oldContent, newContent, 1)
+	// 写入前备份原文件，便于失败时回滚
+	backupPath := path + ".bak"
+	if err := os.WriteFile(backupPath, data, 0644); err != nil {
+		return &agent.StepOutcome{
+			Data:       map[string]any{"status": "error", "msg": fmt.Sprintf("备份失败: %v", err)},
+			NextPrompt: "\n",
+		}
+	}
 	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		// 写入失败，尝试回滚
+		os.Rename(backupPath, path)
 		return &agent.StepOutcome{
 			Data:       map[string]any{"status": "error", "msg": err.Error()},
 			NextPrompt: "\n",
 		}
 	}
+	// 写入成功，删除备份
+	os.Remove(backupPath)
 
 	return &agent.StepOutcome{
 		Data:       map[string]any{"status": "success", "msg": "文件局部修改成功"},
@@ -655,9 +667,11 @@ func (r *Router) doSkillRun(args map[string]any, response *llm.Response) *agent.
 }
 
 func (r *Router) runCode(code, codeType string, timeout int, cwd string) (map[string]any, error) {
-	var cmd *exec.Cmd
 	tmpPath := ""
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
 
+	var cmd *exec.Cmd
 	switch codeType {
 	case "python", "py":
 		tmpFile, err := os.CreateTemp(cwd, "*.ai.py")
@@ -667,21 +681,17 @@ func (r *Router) runCode(code, codeType string, timeout int, cwd string) (map[st
 		tmpPath = tmpFile.Name()
 		tmpFile.WriteString(code)
 		tmpFile.Close()
-		cmd = exec.Command(r.PythonPath, "-X", "utf8", "-u", tmpPath)
+		cmd = exec.CommandContext(ctx, r.PythonPath, "-X", "utf8", "-u", tmpPath)
 	case "powershell", "bash", "sh", "shell":
 		if isWindows() {
-			cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", code)
+			cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", code)
 		} else {
-			cmd = exec.Command("bash", "-c", code)
+			cmd = exec.CommandContext(ctx, "bash", "-c", code)
 		}
 	default:
 		return nil, fmt.Errorf("不支持的类型: %s", codeType)
 	}
 
-	cmd.Dir = cwd
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
-	cmd = exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
 	cmd.Dir = cwd
 
 	var stdout, stderr bytes.Buffer

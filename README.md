@@ -397,14 +397,20 @@ GenericAgent 在基础 Agent 循环之上，实现了八项工程化能力，覆
 
 | 级别 | 策略 | 是否调 LLM | 说明 |
 |:---|:---|:---|:---|
-| L0 | microcompact | 否 | 裁剪超长 tool 结果，保留头部+尾部 |
-| L1 | session memory | 否 | 本地提取关键信息（文件路径、代码引用、决策） |
-| L2 | LLM 摘要 | 是 | 调用 LLM 生成结构化摘要 |
+| L0 | microcompact | 否 | 裁剪超长 tool 结果，保留头部+尾部，优先保留错误行 |
+| L1 | session memory | 否 | 本地提取关键信息（文件路径、代码引用、决策、工具调用） |
+| L2 | LLM 摘要 | 是 | 调用 LLM 生成结构化摘要，支持 PTL 自动重试 |
 | L3 | 硬截断 | 否 | 保留 system + 最近 N 轮原文 |
 
 - **递归守卫**：`recursionGuard` 防止 compact LLM 调用再次触发 compact
 - **分级警告**：warning(70%) / error(85%) / hard(95%) 三级阈值
-- **Token 估算**：中英文混合 + 工具调用 JSON + 图片附件精确估算
+- **精确 Token 计数**：`CountTokensPrecise` 优先调用 LLM 提供商 countTokens API（Anthropic `input_tokens` / OpenAI `total_tokens`），失败自动降级到本地估算
+- **多模态 Token 估算**：图片/文档 2000 tokens/块，thinking 块按 text+thinking 字段计，tool_use 按 name+input JSON 计，tool_result 按 text 计
+- **PTL 重试**：compact 请求触发 prompt-too-long 时，按 API-round 分组丢弃最旧消息后重试，最多 3 次（`truncateHeadForPTLRetry`）
+- **Thinking 块管理**：`clearOldThinking` 仅保留最近 N 轮（默认 2）thinking 块，清理历史 thinking 降低 token 占用
+- **并行 tool_call 计数**：准确处理 ContentBlock 数组中多个 tool_use 块及交错 tool_result 的 token 统计
+- **错误行优先保留**：`truncateToolResult` 分级保留 critical（panic/traceback/fatal，全量保留）与 regular（FAIL/error，保留最后 10 行）错误行
+- **校准机制**：`RecordRealUsage` 根据真实 usage 反馈动态调整估算因子，提升后续估算精度
 
 ### 任务持久化
 
@@ -772,6 +778,45 @@ go test -v ./...
 ```bash
 go test -v -timeout 60s -run TestIntegration .
 ```
+
+### 上下文压力测试
+
+上下文管理模块提供百万级与亿级 token 压力测试，验证大规模场景下的计数性能、压缩效率与信息留存能力。
+
+**百万级测试**（[context_mega_test.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/agent/context_mega_test.go)，11 个场景）：
+
+```bash
+go test ./internal/agent/... -run "TestMega" -count=1 -timeout 300s -v
+```
+
+| 场景 | 规模 | 关键指标 |
+|:---|:---|:---|
+| 50万 token 大文件+日志+JSON | 49.6万 tokens | 压缩率 1.1%，信息留存 100% |
+| 300轮高频对话累积压缩 | 25.8万 tokens | 连续 3 次压缩后信息留存 100% |
+| 100张图片多模态 | 21万 tokens | 图片块 100/100 保留，thinking 100→3 |
+| 单条5.4万token超长日志 | 5.4万 tokens | 释放 98.7%，FAIL+panic 保留 |
+| 50万token计数性能 | 49.6万 tokens | 21ms 完成 |
+| 39万token混合场景全流程 | 39万 tokens | 压缩率 22.4% |
+| 500轮极端高频 | 43万 tokens | 压缩率 0.4% |
+| 24.6万token PTL重试 | 24.6万 tokens | 3 次重试后成功恢复 |
+
+**亿级测试**（[context_giga_test.go](file:///c:/Users/wangrongzhou/Documents/Git/GenericAgent/internal/agent/context_giga_test.go)，7 个场景）：
+
+```bash
+go test ./internal/agent/... -run "TestGiga" -count=1 -timeout 600s -v
+```
+
+| 场景 | 规模 | 计数耗时 | 内存峰值 | 关键指标 |
+|:---|:---|:---|:---|:---|
+| 1亿 token 计数性能 | 97M tokens | 3.66s | 1.69GB | 计数准确 |
+| 2亿 token 计数+压缩 | 208M tokens | 8.6s | 5.27GB | Microcompact 释放 100% |
+| 5亿 token 极限计数 | 486M tokens | 33.8s | 8.43GB | 极限场景完成计数 |
+| 1亿 token 错误行保留 | 97M tokens | - | - | FAIL 10 行 + panic 1 行保留 |
+| 1.56亿 token 多文件留存 | 156M tokens | - | - | 压缩率 0.0094%，信息留存 100% |
+| 5000万 token 5并发计数 | 50M×5 | 8.2s | - | 5 goroutine 结果完全一致 |
+| 1亿 token 二次计数缓存 | 97M tokens | 首次7.06s/二次3.85s | - | 二次计数加速 45.6% |
+
+> 亿级测试会消耗数 GB 内存，建议在 16GB+ 内存的机器上运行。短模式可跳过：`-short`。
 
 ---
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -85,10 +86,18 @@ type Client struct {
 
 	History    []Message
 	LastTools  string
+
+	httpClient *http.Client
+	once       sync.Once
+
+	// 累计 token 用量 (跨多次请求聚合)
+	totalUsage   Usage
+	totalUsageMu sync.Mutex
 }
 
 type StreamChunk struct {
 	Text      string
+	Reasoning string // 推理模型的思考链 (reasoning_content)
 	ToolCalls []ToolCall
 	Done      bool
 	Error     error
@@ -259,10 +268,18 @@ func (c *Client) doRequest(body []byte, stream bool) (*http.Response, error) {
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 
-	client := &http.Client{
-		Timeout: c.ConnectTimeout + c.ReadTimeout,
-	}
-	return client.Do(req)
+	// 复用 http.Client 以利用连接池，避免每次请求重新握手
+	c.once.Do(func() {
+		c.httpClient = &http.Client{
+			Timeout: c.ConnectTimeout + c.ReadTimeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		}
+	})
+	return c.httpClient.Do(req)
 }
 
 func (c *Client) parseJSONResponse(data []byte) (*Response, error) {
@@ -358,7 +375,7 @@ func (c *Client) parseSSEStream(body io.ReadCloser, ch chan<- StreamChunk) error
 		}
 
 		if reasoning, ok := delta["reasoning_content"].(string); ok && reasoning != "" {
-			_ = reasoning
+			ch <- StreamChunk{Reasoning: reasoning}
 		}
 
 		if toolCalls, ok := delta["tool_calls"].([]any); ok {
@@ -394,6 +411,11 @@ func (c *Client) parseSSEStream(body io.ReadCloser, ch chan<- StreamChunk) error
 			if ct, ok := usage["completion_tokens"].(float64); ok {
 				u.OutputTokens = int(ct)
 			}
+			// 聚合累计用量
+			c.totalUsageMu.Lock()
+			c.totalUsage.InputTokens += u.InputTokens
+			c.totalUsage.OutputTokens += u.OutputTokens
+			c.totalUsageMu.Unlock()
 			ch <- StreamChunk{Usage: u}
 		}
 	}
@@ -480,6 +502,13 @@ func strVal(v any) string {
 	return fmt.Sprintf("%v", v)
 }
 
+// GetTotalUsage 返回跨所有请求的累计 token 用量
+func (c *Client) GetTotalUsage() Usage {
+	c.totalUsageMu.Lock()
+	defer c.totalUsageMu.Unlock()
+	return c.totalUsage
+}
+
 func floatVal(v any) float64 {
 	if f, ok := v.(float64); ok {
 		return f
@@ -488,6 +517,96 @@ func floatVal(v any) float64 {
 }
 
 var codeBlockRe = regexp.MustCompile("```\\w*\n[\\s\\S]*?```")
+
+// CountTokens 调用 provider 的 count_tokens API 获取精确 token 数
+// 支持 Anthropic 原生 /v1/messages/count_tokens 端点
+// 不支持时返回错误, 调用方应降级到本地估算
+// 参考 cc-haha tokenEstimation.ts: countTokensViaAPI
+func (c *Client) CountTokens(messages []Message) (int, error) {
+	if c == nil || c.APIBase == "" {
+		return 0, fmt.Errorf("client not configured")
+	}
+
+	// 构造请求体 (与 chat/completions 一致的消息格式)
+	msgs := make([]any, 0, len(messages))
+	for _, m := range messages {
+		if m.Role == "tool" {
+			msgs = append(msgs, map[string]any{
+				"role":         "tool",
+				"tool_call_id": m.ToolCallID,
+				"content":      m.Content,
+			})
+			continue
+		}
+		msg := map[string]any{"role": m.Role}
+		if len(m.ToolCalls) > 0 {
+			msg["tool_calls"] = buildAssistantToolCalls(m.ToolCalls)
+		}
+		if m.Content != nil {
+			msg["content"] = m.Content
+		}
+		msgs = append(msgs, msg)
+	}
+
+	payload := map[string]any{
+		"model":    c.Model,
+		"messages": msgs,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+
+	url := autoMakeURL(c.APIBase, "messages/count_tokens")
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	c.once.Do(func() {
+		c.httpClient = &http.Client{
+			Timeout: c.ConnectTimeout + c.ReadTimeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		}
+	})
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	if resp.StatusCode >= 400 {
+		return 0, fmt.Errorf("count_tokens HTTP %d: %s", resp.StatusCode, string(data[:min(len(data), 200)]))
+	}
+
+	// 解析响应: Anthropic 格式 {"input_tokens": N}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return 0, err
+	}
+	if tokens, ok := raw["input_tokens"].(float64); ok {
+		return int(tokens), nil
+	}
+	// OpenAI 兼容格式 {"total_tokens": N}
+	if tokens, ok := raw["total_tokens"].(float64); ok {
+		return int(tokens), nil
+	}
+	return 0, fmt.Errorf("count_tokens response missing token field")
+}
 
 func CleanContent(text string) string {
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(m string) string {
