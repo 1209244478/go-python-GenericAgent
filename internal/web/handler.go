@@ -1132,6 +1132,18 @@ func buildSkillsSectionWithBudget(skillDir string, contextWindowTokens int) stri
 		}
 	}
 
+	// 权限过滤: 移除被 deny 的技能
+	perms := loadSkillPermissions(skillDir)
+	if perms != nil {
+		filtered := metas[:0]
+		for _, m := range metas {
+			if isSkillAllowed(perms, m.Name) {
+				filtered = append(filtered, m)
+			}
+		}
+		metas = filtered
+	}
+
 	return formatSkillsWithinBudget(metas, contextWindowTokens)
 }
 

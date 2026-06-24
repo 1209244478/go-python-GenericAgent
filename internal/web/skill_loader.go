@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,8 @@ type SkillMeta struct {
 	HasScript            bool // 有 .py 脚本
 	BaseDir              string
 	MarkdownContent      string // frontmatter 之后的正文
+	Context              string   // inline (默认) 或 fork
+	Paths                []string // glob 路径过滤, 仅当操作匹配文件时激活
 }
 
 // parseFrontmatter 解析 SKILL.md 的 YAML-like frontmatter
@@ -91,6 +94,14 @@ func loadSkillMeta(skillDir, skillName string) *SkillMeta {
 		if v, ok := fm["allowed-tools"]; ok && v != "" {
 			for _, t := range strings.Fields(v) {
 				meta.AllowedTools = append(meta.AllowedTools, t)
+			}
+		}
+		if v, ok := fm["context"]; ok {
+			meta.Context = strings.TrimSpace(v)
+		}
+		if v, ok := fm["paths"]; ok && v != "" {
+			for _, p := range strings.Fields(v) {
+				meta.Paths = append(meta.Paths, p)
 			}
 		}
 	}
@@ -233,4 +244,64 @@ func buildSkillDescription(m *SkillMeta) string {
 		desc = desc[:skillMaxListingDescChars-1] + "…"
 	}
 	return desc
+}
+
+// SkillPermissions 技能权限配置
+// 参考 cc-haha permissions: deny/allow 前缀匹配
+type SkillPermissions struct {
+	Deny  []string `json:"deny"`  // 拒绝列表 (前缀匹配, * 通配)
+	Allow []string `json:"allow"` // 允许列表 (前缀匹配, * 通配, 非空时仅允许列表内技能)
+}
+
+// loadSkillPermissions 从 skills 目录加载权限配置
+// 配置文件: skills/skill_permissions.json
+func loadSkillPermissions(skillDir string) *SkillPermissions {
+	if skillDir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(skillDir, "skill_permissions.json"))
+	if err != nil {
+		return nil
+	}
+	var perms SkillPermissions
+	if jsonErr := json.Unmarshal(data, &perms); jsonErr != nil {
+		return nil
+	}
+	return &perms
+}
+
+// isSkillAllowed 检查技能是否被允许
+// deny 优先于 allow; allow 非空时仅允许列表内技能
+func isSkillAllowed(perms *SkillPermissions, skillName string) bool {
+	if perms == nil {
+		return true // 无配置, 全部允许
+	}
+	// 检查 deny
+	for _, pattern := range perms.Deny {
+		if matchSkillPattern(pattern, skillName) {
+			return false
+		}
+	}
+	// allow 非空时, 必须匹配
+	if len(perms.Allow) > 0 {
+		for _, pattern := range perms.Allow {
+			if matchSkillPattern(pattern, skillName) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// matchSkillPattern 前缀/通配匹配 (支持 * 后缀, 如 "review:*")
+func matchSkillPattern(pattern, name string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(name, prefix)
+	}
+	return pattern == name
 }
