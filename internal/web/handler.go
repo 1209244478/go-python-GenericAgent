@@ -1023,6 +1023,12 @@ func (h *Handler) ListTemplates(c *gin.Context) {
 }
 
 func buildSkillsSection(skillDir string) string {
+	return buildSkillsSectionWithBudget(skillDir, 0)
+}
+
+// buildSkillsSectionWithBudget 按上下文窗口预算构建 skill 列表
+// 参考 cc-haha: 仅注入 frontmatter (name/description/when_to_use), 正文懒加载
+func buildSkillsSectionWithBudget(skillDir string, contextWindowTokens int) string {
 	if skillDir == "" {
 		return ""
 	}
@@ -1038,8 +1044,10 @@ func buildSkillsSection(skillDir string) string {
 		}
 	}
 
-	var lines []string
+	var metas []*SkillMeta
 	processed := map[string]bool{}
+
+	// 1. 脚本 skill (.py + 可选 SKILL.md 目录)
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || entry.IsDir() {
@@ -1051,52 +1059,54 @@ func buildSkillsSection(skillDir string) string {
 
 		skillName := strings.TrimSuffix(name, ".py")
 		processed[skillName] = true
-		desc := ""
 
+		meta := &SkillMeta{
+			Name:         skillName,
+			HasScript:    true,
+			UserInvocable: true,
+		}
+		// 优先从 SKILL.md 读取 frontmatter
 		if dirs[skillName] {
-			skillMd := filepath.Join(skillDir, skillName, "SKILL.md")
-			if data, err := os.ReadFile(skillMd); err == nil {
-				if d := extractSkillDescription(string(data)); d != "" {
-					desc = d
-				}
+			if m := loadSkillMeta(skillDir, skillName); m != nil {
+				m.HasScript = true
+				m.IsPromptSkill = false
+				meta = m
 			}
 		}
-
-		if desc == "" {
+		// description fallback: 从 .py 注释提取
+		if meta.Description == "" {
 			if data, err := os.ReadFile(filepath.Join(skillDir, name)); err == nil {
-				desc = extractPyDescription(string(data))
+				meta.Description = extractPyDescription(string(data))
 			}
 		}
-
-		if desc == "" {
-			desc = "可用技能"
+		if meta.Description == "" {
+			meta.Description = "可用技能"
 		}
-
-		lines = append(lines, fmt.Sprintf("- **%s**: %s", skillName, desc))
+		// 跳过 disable-model-invocation 的 skill
+		if !meta.DisableModelInvoke {
+			metas = append(metas, meta)
+		}
 	}
 
-	// 纯提示词 skill: 含 SKILL.md 但无对应 .py 的目录
+	// 2. 纯提示词 skill (有 SKILL.md 但无 .py 的目录)
 	for dirName := range dirs {
 		if processed[dirName] {
 			continue
 		}
-		skillMd := filepath.Join(skillDir, dirName, "SKILL.md")
-		data, err := os.ReadFile(skillMd)
-		if err != nil {
+		meta := loadSkillMeta(skillDir, dirName)
+		if meta == nil {
 			continue
 		}
-		desc := extractSkillDescription(string(data))
-		if desc == "" {
-			desc = "提示词技能 (查阅 SKILL.md 获取用法)"
+		meta.IsPromptSkill = true
+		if meta.Description == "" {
+			meta.Description = "提示词技能 (查阅 SKILL.md)"
 		}
-		lines = append(lines, fmt.Sprintf("- **%s**: %s [提示词技能]", dirName, desc))
+		if !meta.DisableModelInvoke {
+			metas = append(metas, meta)
+		}
 	}
 
-	if len(lines) == 0 {
-		return "\n当前无已安装技能。将技能 .py 文件或含 SKILL.md 的子目录放入 skills 目录即可。\n"
-	}
-
-	return "\n## 当前可用技能\n" + strings.Join(lines, "\n") + "\n"
+	return formatSkillsWithinBudget(metas, contextWindowTokens)
 }
 
 func buildSystemPrompt(memMgr *memory.Manager, userDir string, skillDir string) string {
@@ -1112,7 +1122,7 @@ func buildSystemPrompt(memMgr *memory.Manager, userDir string, skillDir string) 
 	if skillDir != "" {
 		prompt += fmt.Sprintf("\n## 技能目录\n技能安装目录: %s\n", skillDir)
 	}
-	prompt += buildSkillsSection(skillDir)
+	prompt += buildSkillsSectionWithBudget(skillDir, 200000)
 	prompt += fmt.Sprintf("\nToday: %s %s\n", time.Now().Format("2006-01-02"), time.Now().Format("Mon"))
 	globalMem := memMgr.GetGlobalMemory()
 	if globalMem != "" {

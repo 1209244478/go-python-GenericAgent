@@ -632,6 +632,9 @@ func (r *Router) doSkillRun(args map[string]any, response *llm.Response) *agent.
 		// 纯提示词 skill fallback: 无 .py 但有 SKILL.md 的目录
 		skillMdPath := filepath.Join(r.SkillDir, skillName, "SKILL.md")
 		if mdData, mdErr := os.ReadFile(skillMdPath); mdErr == nil {
+			skillDirAbs := filepath.Join(r.SkillDir, skillName)
+			processed := substituteSkillVars(string(mdData), args, skillDirAbs, skillName)
+
 			action := strArg(args, "action", "")
 			fileName := strArg(args, "file", "")
 			// read_file 读取 SKILL.md 或目录内其他文件
@@ -641,15 +644,16 @@ func (r *Router) doSkillRun(args map[string]any, response *llm.Response) *agent.
 					targetPath = filepath.Join(r.SkillDir, skillName, fileName)
 				}
 				if content, fErr := os.ReadFile(targetPath); fErr == nil {
+					processedContent := substituteSkillVars(string(content), args, skillDirAbs, skillName)
 					return &agent.StepOutcome{
-						Data:       map[string]any{"status": "success", "content": string(content), "skill": skillName, "type": "prompt"},
+						Data:       map[string]any{"status": "success", "content": processedContent, "skill": skillName, "type": "prompt"},
 						NextPrompt: "\n",
 					}
 				}
 			}
-			// 其他 action: 返回 SKILL.md 内容供 LLM 参考后自行执行
+			// 其他 action: 返回处理后的 SKILL.md 内容供 LLM 参考后自行执行
 			return &agent.StepOutcome{
-				Data:       map[string]any{"status": "success", "content": string(mdData), "skill": skillName, "type": "prompt", "note": "提示词技能, 请阅读 SKILL.md 后按指导执行 (可能需要 code_run/bash 调用外部命令)"},
+				Data:       map[string]any{"status": "success", "content": processed, "skill": skillName, "type": "prompt", "note": "提示词技能, 请阅读 SKILL.md 后按指导执行 (可能需要 code_run/bash 调用外部命令)"},
 				NextPrompt: "\n",
 			}
 		}
@@ -821,6 +825,40 @@ func extractCodeBlock(content, codeType string) string {
 		return ""
 	}
 	return strings.TrimSpace(matches[len(matches)-1][1])
+}
+
+// substituteSkillVars 在 SKILL.md 内容中执行变量替换
+// 参考 cc-haha: 支持 $ARGUMENTS, ${SKILL_DIR}, ${SKILL_NAME}, 以及命名参数 $key
+func substituteSkillVars(content string, args map[string]any, skillDir, skillName string) string {
+	// 1. ${SKILL_DIR} -> skill 目录绝对路径
+	content = strings.ReplaceAll(content, "${SKILL_DIR}", skillDir)
+	content = strings.ReplaceAll(content, "${CLAUDE_SKILL_DIR}", skillDir)
+
+	// 2. ${SKILL_NAME}
+	content = strings.ReplaceAll(content, "${SKILL_NAME}", skillName)
+
+	// 3. $ARGUMENTS -> args 中 "arguments" 或 "args" 字段 (用户传入的自由文本参数)
+	if argStr, ok := args["arguments"].(string); ok {
+		content = strings.ReplaceAll(content, "$ARGUMENTS", argStr)
+	} else if argStr, ok := args["args"].(string); ok {
+		content = strings.ReplaceAll(content, "$ARGUMENTS", argStr)
+	} else {
+		content = strings.ReplaceAll(content, "$ARGUMENTS", "")
+	}
+
+	// 4. 命名参数替换: $key 或 ${key} -> args[key]
+	// 仅替换已知参数键, 避免误伤 markdown 中的 $ 符号
+	for key, val := range args {
+		// 跳过保留字段
+		if key == "skill" || key == "action" || key == "file" || key == "arguments" || key == "args" {
+			continue
+		}
+		strVal := fmt.Sprintf("%v", val)
+		content = strings.ReplaceAll(content, "${"+key+"}", strVal)
+		content = strings.ReplaceAll(content, "$"+key+" ", strVal+" ")
+	}
+
+	return content
 }
 
 func smartFormat(data string, maxLen int) string {
