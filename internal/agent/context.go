@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -93,10 +94,94 @@ type ContextManager struct {
 	calibrationFactor   float64 // 估算值 * factor ≈ 真实值
 	calibrationSamples  int     // 校准样本数
 	lastRealInputTokens int     // 最近一次 LLM 真实输入 token
+
+	// F4: 持久化路径 (可选, 设置后 compactionHistory + calibration 会落盘)
+	// 格式: context_meta.json, 存储压缩历史和校准系数
+	metaPath string
+}
+
+// F4: contextMeta 持久化的上下文元数据
+type contextMeta struct {
+	CompactionHistory  []string `json:"compaction_history"`
+	CalibrationFactor  float64  `json:"calibration_factor"`
+	CalibrationSamples int      `json:"calibration_samples"`
 }
 
 // 连续失败上限
 const maxConsecutiveCompactFailures = 3
+
+// F4: SetMetaPath 设置持久化路径并立即加载已有元数据
+// 设置后, compactionHistory 和 calibrationFactor 会自动落盘/加载
+func (cm *ContextManager) SetMetaPath(path string) {
+	cm.mu.Lock()
+	cm.metaPath = path
+	cm.mu.Unlock()
+	cm.LoadMeta()
+}
+
+// F4: LoadMeta 从磁盘加载上下文元数据 (compactionHistory + calibration)
+func (cm *ContextManager) LoadMeta() {
+	cm.mu.Lock()
+	path := cm.metaPath
+	cm.mu.Unlock()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // 无文件, 首次使用
+	}
+	var meta contextMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return
+	}
+
+	cm.mu.Lock()
+	if len(meta.CompactionHistory) > 0 {
+		cm.compactionHistory = meta.CompactionHistory
+	}
+	cm.mu.Unlock()
+
+	cm.calibrationMu.Lock()
+	if meta.CalibrationFactor > 0 && meta.CalibrationFactor < 10 {
+		cm.calibrationFactor = meta.CalibrationFactor
+		cm.calibrationSamples = meta.CalibrationSamples
+	}
+	cm.calibrationMu.Unlock()
+}
+
+// F4: SaveMeta 将上下文元数据落盘 (compactionHistory + calibration)
+// 原子写: tmp + rename
+func (cm *ContextManager) SaveMeta() {
+	cm.mu.Lock()
+	path := cm.metaPath
+	history := cm.compactionHistory
+	cm.mu.Unlock()
+
+	cm.calibrationMu.RLock()
+	factor := cm.calibrationFactor
+	samples := cm.calibrationSamples
+	cm.calibrationMu.RUnlock()
+
+	if path == "" {
+		return
+	}
+
+	meta := contextMeta{
+		CompactionHistory:  history,
+		CalibrationFactor:  factor,
+		CalibrationSamples: samples,
+	}
+	data, err := json.MarshalIndent(&meta, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return
+	}
+	os.Rename(tmp, path)
+}
 
 // NewContextManager 创建上下文管理器
 func NewContextManager(client *llm.Client) *ContextManager {
@@ -150,13 +235,13 @@ func (cm *ContextManager) RecordRealUsage(realInputTokens int, messages []llm.Me
 	estimated := cm.estimateRawTokens(messages) // 不含校准系数的原始估算
 
 	cm.calibrationMu.Lock()
-	defer cm.calibrationMu.Unlock()
 
 	cm.lastRealInputTokens = realInputTokens
 
 	// 计算新系数 = 真实值 / 估算值
 	newFactor := float64(realInputTokens) / float64(estimated)
 	if newFactor <= 0 || newFactor > 10 {
+		cm.calibrationMu.Unlock()
 		return // 异常值, 忽略
 	}
 
@@ -168,6 +253,14 @@ func (cm *ContextManager) RecordRealUsage(realInputTokens int, messages []llm.Me
 		cm.calibrationFactor = 0.7*cm.calibrationFactor + 0.3*newFactor
 	}
 	cm.calibrationSamples++
+
+	// F4: 每 10 次校准落盘一次 (避免频繁 IO)
+	// 注意: 此处仍持有 calibrationMu, SaveMeta 内部会获取 mu 锁 (无嵌套, 因锁不同)
+	shouldSave := cm.calibrationSamples%10 == 0
+	cm.calibrationMu.Unlock()
+	if shouldSave {
+		cm.SaveMeta()
+	}
 }
 
 // estimateRawTokens 原始估算 (不含校准系数)
@@ -893,6 +986,8 @@ func (cm *ContextManager) Compact(messages []llm.Message) ([]llm.Message, error)
 			}
 		}
 		cm.mu.Unlock()
+		// F4: 持久化压缩历史
+		cm.SaveMeta()
 		return result, nil
 	}
 

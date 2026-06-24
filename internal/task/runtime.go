@@ -120,6 +120,12 @@ func (r *Runtime) Start(cfg TaskConfig) (*Task, error) {
 		CwdOverride: cfg.CwdOverride,
 	})
 
+	// F4: 设置上下文元数据持久化路径 (compactionHistory + calibration 落盘)
+	if a.ContextMgr != nil {
+		metaPath := filepath.Join(r.store.taskDir(cfg.UserID, taskID), "context_meta.json")
+		a.ContextMgr.SetMetaPath(metaPath)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &Task{
 		State:        state,

@@ -2,6 +2,8 @@ package task
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -94,10 +96,18 @@ const (
 	stateMaxBackups = 3 // 保留最近 3 份 state 备份
 )
 
-// Save 原子写入 state.json (带多版本备份 + 索引更新)
+// Save 原子写入 state.json (带 WAL + 多版本备份 + fsync + 索引更新)
+// F1: WAL 接入 (写前日志, 崩溃可重放)
+// F3: fsync 保证落盘
 func (s *Store) Save(state *TaskState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// F1: WAL 写前日志 (崩溃后可重放此 state)
+	walEntry := walEntry{Op: "save_state", State: state}
+	if err := s.WALAppend(state.UserID, state.ID, walEntry); err != nil {
+		return fmt.Errorf("WAL append failed: %w", err)
+	}
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -106,18 +116,22 @@ func (s *Store) Save(state *TaskState) error {
 	path := s.statePath(state.UserID, state.ID)
 
 	// 多版本备份: state.json.bak -> state.json.bak.1 -> ... (删除最老的)
-	// 先备份当前版本
 	if _, err := os.Stat(path); err == nil {
 		s.rotateStateBackup(state.UserID, state.ID)
-		// 将当前 state.json 复制为 .bak (不是 rename, 因为后面要原子替换)
 		if oldData, err := os.ReadFile(path); err == nil {
 			os.WriteFile(path+".bak", oldData, 0644)
 		}
 	}
 
+	// F3: 写 tmp 文件 + fsync + 原子 rename
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err
+	}
+	// fsync tmp 文件, 保证数据落盘后再 rename
+	if f, err := os.Open(tmp); err == nil {
+		f.Sync()
+		f.Close()
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return err
@@ -125,6 +139,9 @@ func (s *Store) Save(state *TaskState) error {
 
 	// 同步更新索引 (不加锁, 已持有 s.mu)
 	s.updateIndexLocked(state.UserID, state)
+
+	// F1: 操作成功, 清理 WAL
+	s.WALCheckpoint(state.UserID, state.ID)
 	return nil
 }
 
@@ -180,9 +197,16 @@ func (s *Store) RollbackState(userID int64, taskID string) (*TaskState, error) {
 
 // SaveMessages 全量保存消息历史 (JSONL 格式, 覆盖写)
 // 用于任务结束时的最终快照, 或压缩后的全量重写
+// F1: WAL 接入 / F2: SHA256 校验和 / F3: fsync
 func (s *Store) SaveMessages(userID int64, taskID string, msgs []llm.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// F1: WAL 写前日志
+	walEntry := walEntry{Op: "save_msgs", Msgs: msgs}
+	if err := s.WALAppend(userID, taskID, walEntry); err != nil {
+		return fmt.Errorf("WAL append failed: %w", err)
+	}
 
 	jsonlPath := s.messagesJSONLPath(userID, taskID)
 	tmp := jsonlPath + ".tmp"
@@ -205,6 +229,12 @@ func (s *Store) SaveMessages(userID int64, taskID string, msgs []llm.Message) er
 		os.Remove(tmp)
 		return err
 	}
+	// F3: fsync 落盘后再 rename
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		return err
@@ -216,18 +246,26 @@ func (s *Store) SaveMessages(userID int64, taskID string, msgs []llm.Message) er
 	// 删除旧格式 JSON (迁移完成)
 	os.Remove(s.messagesPath(userID, taskID))
 
+	// F2: 计算并保存 SHA256 校验和
+	checksum := s.computeJSONLChecksum(jsonlPath)
+
 	// 更新元数据
 	meta := messagesMeta{
 		SavedCount: len(msgs),
 		Compacted:  true,
+		SHA256:     checksum,
 	}
 	s.saveMessagesMeta(userID, taskID, meta)
+
+	// F1: 操作成功, 清理 WAL
+	s.WALCheckpoint(userID, taskID)
 	return nil
 }
 
 // AppendMessages 增量追加新消息到 JSONL
 // 只追加 msgs 中超出已保存数量的部分, 避免全量写
 // 返回实际追加的消息数
+// F1: WAL 接入 / F2: SHA256 校验和 / F3: fsync
 func (s *Store) AppendMessages(userID int64, taskID string, msgs []llm.Message) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -243,6 +281,12 @@ func (s *Store) AppendMessages(userID int64, taskID string, msgs []llm.Message) 
 
 	newMsgs := msgs[start:]
 	jsonlPath := s.messagesJSONLPath(userID, taskID)
+
+	// F1: WAL 写前日志 (只记录新增部分)
+	walEntry := walEntry{Op: "append_msgs", Msgs: newMsgs}
+	if err := s.WALAppend(userID, taskID, walEntry); err != nil {
+		return 0, fmt.Errorf("WAL append failed: %w", err)
+	}
 
 	// 如果是首次写入或已压缩, 直接追加
 	f, err := os.OpenFile(jsonlPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -264,20 +308,41 @@ func (s *Store) AppendMessages(userID int64, taskID string, msgs []llm.Message) 
 	if err := bw.Flush(); err != nil {
 		return appended, err
 	}
+	// F3: fsync 保证追加内容落盘
+	if err := f.Sync(); err != nil {
+		return appended, err
+	}
+
+	// F2: 计算并保存 SHA256 校验和
+	checksum := s.computeJSONLChecksum(jsonlPath)
 
 	// 更新元数据
 	meta.SavedCount = len(msgs)
 	meta.Compacted = false
+	meta.SHA256 = checksum
 	s.saveMessagesMeta(userID, taskID, meta)
+
+	// F1: 操作成功, 清理 WAL
+	s.WALCheckpoint(userID, taskID)
 	return appended, nil
 }
 
 // LoadMessages 加载消息历史
 // 优先读 JSONL, 回退到旧 JSON 格式 (兼容)
+// F2: 读取时校验 SHA256 (若元数据中存在)
 func (s *Store) LoadMessages(userID int64, taskID string) ([]llm.Message, error) {
 	// 优先 JSONL
 	jsonlPath := s.messagesJSONLPath(userID, taskID)
 	if data, err := os.ReadFile(jsonlPath); err == nil {
+		// F2: 校验 SHA256 (若元数据中存在)
+		meta := s.loadMessagesMeta(userID, taskID)
+		if meta.SHA256 != "" {
+			actual := computeSHA256Hex(data)
+			if actual != meta.SHA256 {
+				return nil, fmt.Errorf("jsonl checksum mismatch: expected %s, got %s (file may be corrupted)", meta.SHA256[:8], actual[:8])
+			}
+		}
+
 		var msgs []llm.Message
 		dec := json.NewDecoder(strings.NewReader(string(data)))
 		for {
@@ -303,6 +368,21 @@ func (s *Store) LoadMessages(userID int64, taskID string) ([]llm.Message, error)
 		return nil, err
 	}
 	return msgs, nil
+}
+
+// F2: computeJSONLChecksum 计算 JSONL 文件的 SHA256 校验和
+func (s *Store) computeJSONLChecksum(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return computeSHA256Hex(data)
+}
+
+// F2: computeSHA256Hex 计算字节数组的 SHA256 十六进制摘要
+func computeSHA256Hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
 }
 
 // loadMessagesMeta 加载 JSONL 元数据
@@ -431,6 +511,7 @@ type walEntry struct {
 }
 
 // WALAppend 追加 WAL 条目 (在执行实际写操作前调用)
+// 含 fsync 保证崩溃安全
 func (s *Store) WALAppend(userID int64, taskID string, entry walEntry) error {
 	entry.TS = time.Now().UnixNano()
 	data, err := json.Marshal(&entry)
@@ -442,12 +523,16 @@ func (s *Store) WALAppend(userID int64, taskID string, entry walEntry) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(append(data, '\n'))
-	return err
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	// fsync 保证 WAL 落盘 (崩溃安全的关键)
+	return f.Sync()
 }
 
 // WALRecover 从 WAL 恢复未完成的操作
-// 在服务启动时调用, 重放 WAL 中未 checkpoint 的操作
+// 在服务启动时调用, 重放 WAL 中所有未 checkpoint 的操作
+// F1 修复: 重放所有条目 (而非只最后一条), 防止多条操作丢失
 func (s *Store) WALRecover(userID int64, taskID string) error {
 	path := s.walPath(userID, taskID)
 	f, err := os.Open(path)
@@ -458,31 +543,36 @@ func (s *Store) WALRecover(userID int64, taskID string) error {
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024) // 最大 10MB 行
-	var lastEntry *walEntry
+	var entries []walEntry
 
 	for scanner.Scan() {
 		var entry walEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue // 跳过损坏行
 		}
-		lastEntry = &entry
+		entries = append(entries, entry)
 	}
 
-	// 只重放最后一条 (假设之前的已 checkpoint)
-	if lastEntry == nil {
+	if len(entries) == 0 {
 		return nil
 	}
 
-	switch lastEntry.Op {
-	case "save_state":
-		if lastEntry.State != nil {
-			// 直接写入 state (可能上次 Save 中途崩溃)
-			data, _ := json.MarshalIndent(lastEntry.State, "", "  ")
-			os.WriteFile(s.statePath(userID, taskID), data, 0644)
-		}
-	case "save_msgs":
-		if lastEntry.Msgs != nil {
-			s.SaveMessages(userID, taskID, lastEntry.Msgs)
+	// 重放所有未 checkpoint 的操作 (按时间顺序)
+	for _, entry := range entries {
+		switch entry.Op {
+		case "save_state":
+			if entry.State != nil {
+				data, _ := json.MarshalIndent(entry.State, "", "  ")
+				os.WriteFile(s.statePath(userID, taskID), data, 0644)
+			}
+		case "save_msgs":
+			if entry.Msgs != nil {
+				s.SaveMessages(userID, taskID, entry.Msgs)
+			}
+		case "append_msgs":
+			if entry.Msgs != nil {
+				s.AppendMessages(userID, taskID, entry.Msgs)
+			}
 		}
 	}
 
