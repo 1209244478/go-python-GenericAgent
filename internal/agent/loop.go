@@ -208,6 +208,12 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 			if len(chunk.ToolCalls) > 0 {
 				collectedToolCalls = append(collectedToolCalls, chunk.ToolCalls...)
 			}
+			// 记录真实 usage, 自校准 token 估算
+			if chunk.Usage != nil && chunk.Usage.InputTokens > 0 {
+				if a.ContextMgr != nil {
+					a.ContextMgr.RecordRealUsage(chunk.Usage.InputTokens, messages)
+				}
+			}
 			if chunk.Done {
 				break
 			}

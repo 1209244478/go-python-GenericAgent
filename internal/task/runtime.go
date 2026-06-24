@@ -417,6 +417,9 @@ func (r *Runtime) Restore() error {
 			continue
 		}
 		for _, state := range states {
+			// WAL 恢复: 重放未完成的写操作
+			r.store.WALRecover(uid, state.ID)
+
 			if state.Status == StatusRunning || state.Status == StatusPaused {
 				state.Status = StatusFailed
 				state.Error = "interrupted by server restart"

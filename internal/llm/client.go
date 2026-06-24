@@ -92,6 +92,7 @@ type StreamChunk struct {
 	ToolCalls []ToolCall
 	Done      bool
 	Error     error
+	Usage     *Usage // 流式结束时的 usage (部分 API 在最后 chunk 返回)
 }
 
 func (c *Client) Chat(params ChatParams) (<-chan StreamChunk, error) {
@@ -386,7 +387,14 @@ func (c *Client) parseSSEStream(body io.ReadCloser, ch chan<- StreamChunk) error
 		}
 
 		if usage, ok := evt["usage"].(map[string]any); ok {
-			_ = usage
+			u := &Usage{}
+			if pt, ok := usage["prompt_tokens"].(float64); ok {
+				u.InputTokens = int(pt)
+			}
+			if ct, ok := usage["completion_tokens"].(float64); ok {
+				u.OutputTokens = int(ct)
+			}
+			ch <- StreamChunk{Usage: u}
 		}
 	}
 
