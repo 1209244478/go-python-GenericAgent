@@ -204,11 +204,16 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 		}
 
 		var fullContent string
+		var fullThinking string
 		var collectedToolCalls []llm.ToolCall
 		for chunk := range streamCh {
 			if chunk.Error != nil {
 				ch <- DisplayItem{Turn: turn, Content: fmt.Sprintf("Error: %v", chunk.Error), Source: "error"}
 				break
+			}
+			if chunk.Reasoning != "" {
+				fullThinking += chunk.Reasoning
+				ch <- DisplayItem{Turn: turn, Content: chunk.Reasoning, Source: "thinking"}
 			}
 			if chunk.Text != "" {
 				fullContent += chunk.Text
@@ -240,7 +245,12 @@ func (a *Agent) Run(userInput string, source string, history []llm.Message) <-ch
 		var toolCalls []toolCallInfo
 		if len(response.ToolCalls) == 0 {
 			if fullContent == "" {
-				ch <- DisplayItem{Turn: turn, Content: "", Source: "final"}
+				if fullThinking != "" {
+					// LLM 仅输出思考未输出正文 (常见于 max_tokens 被思考耗尽)
+					ch <- DisplayItem{Turn: turn, Content: "思考已完成，但未生成正文内容（可能受 max_tokens 限制）。请增大 LLM_MAX_TOKENS 或简化请求。", Source: "final"}
+				} else {
+					ch <- DisplayItem{Turn: turn, Content: "", Source: "final"}
+				}
 			}
 			exitReason = map[string]any{"result": "CURRENT_TASK_DONE", "data": fullContent}
 			break

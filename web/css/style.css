@@ -279,6 +279,22 @@ html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--t
   background:var(--surface-2);border:1px solid var(--border-subtle);
   border-radius:6px;border-left:3px solid var(--accent);
 }
+.msg-thinking{
+  margin:.5rem 0;border:1px solid var(--border-subtle);
+  border-radius:6px;border-left:3px solid var(--text-muted);
+  background:var(--surface-2);overflow:hidden;
+}
+.msg-thinking .thinking-header{
+  display:flex;align-items:center;gap:.375rem;
+  padding:.375rem .75rem;font-size:.75rem;
+  color:var(--text-muted);cursor:pointer;user-select:none;
+}
+.msg-thinking .thinking-body{
+  padding:.5rem .75rem;font-size:.8125rem;line-height:1.5;
+  color:var(--text-muted);white-space:pre-wrap;
+  border-top:1px solid var(--border-subtle);
+  max-height:400px;overflow-y:auto;font-family:var(--mono);
+}
 .msg-tool-history{
   max-width:600px;align-self:flex-start;
 }
