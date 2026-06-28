@@ -15,6 +15,7 @@ type User struct {
 	Email     string `json:"email"`
 	Password  string `json:"-"`
 	Name      string `json:"name"`
+	UserType  string `json:"user_type"` // "admin" 或 "user"
 	CreatedAt string `json:"created_at"`
 }
 
@@ -72,6 +73,7 @@ func (s *UserStore) migrate() error {
 				email      VARCHAR(255)    NOT NULL UNIQUE,
 				password   VARCHAR(255)    NOT NULL,
 				name       VARCHAR(100)    NOT NULL DEFAULT '',
+				user_type  VARCHAR(20)     NOT NULL DEFAULT 'user',
 				created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 		`)
@@ -99,6 +101,7 @@ func (s *UserStore) migrate() error {
 			email      TEXT    NOT NULL UNIQUE,
 			password   TEXT    NOT NULL,
 			name       TEXT    NOT NULL DEFAULT '',
+			user_type  TEXT    NOT NULL DEFAULT 'user',
 			created_at TEXT    NOT NULL DEFAULT (datetime('now'))
 		)
 	`)
@@ -122,15 +125,20 @@ func (s *UserStore) migrate() error {
 	return nil
 }
 
-func (s *UserStore) Create(email, password, name string) (*User, error) {
+func (s *UserStore) Create(email, password, name, userType string) (*User, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 
+	// 默认为普通用户
+	if userType == "" {
+		userType = "user"
+	}
+
 	result, err := s.db.Exec(
-		"INSERT INTO users (email, password, name) VALUES (?, ?, ?)",
-		email, string(hash), name,
+		"INSERT INTO users (email, password, name, user_type) VALUES (?, ?, ?, ?)",
+		email, string(hash), name, userType,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert user: %w", err)
@@ -141,6 +149,7 @@ func (s *UserStore) Create(email, password, name string) (*User, error) {
 		ID:        id,
 		Email:     email,
 		Name:      name,
+		UserType:  userType,
 		CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 	}, nil
 }
@@ -148,9 +157,9 @@ func (s *UserStore) Create(email, password, name string) (*User, error) {
 func (s *UserStore) GetByEmail(email string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRow(
-		"SELECT id, email, password, name, created_at FROM users WHERE email = ?",
+		"SELECT id, email, password, name, user_type, created_at FROM users WHERE email = ?",
 		email,
-	).Scan(&u.ID, &u.Email, &u.Password, &u.Name, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.Password, &u.Name, &u.UserType, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -163,9 +172,9 @@ func (s *UserStore) GetByEmail(email string) (*User, error) {
 func (s *UserStore) GetByID(id int64) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRow(
-		"SELECT id, email, password, name, created_at FROM users WHERE id = ?",
+		"SELECT id, email, password, name, user_type, created_at FROM users WHERE id = ?",
 		id,
-	).Scan(&u.ID, &u.Email, &u.Password, &u.Name, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.Password, &u.Name, &u.UserType, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

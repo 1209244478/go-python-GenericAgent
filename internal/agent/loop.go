@@ -21,13 +21,13 @@ type StepOutcome struct {
 type ToolHandler func(toolName string, args map[string]any, response *llm.Response, index int, toolNum int) *StepOutcome
 
 type DisplayItem struct {
-	Turn       int
-	Content    string
-	Done       bool
-	Source     string
-	Outputs    []string
-	ToolCalls  []llm.ToolCall
-	ToolCallID string
+	Turn       int            `json:"turn"`
+	Content    string         `json:"content"`
+	Done       bool           `json:"done"`
+	Source     string         `json:"source"`
+	Outputs    []string       `json:"outputs,omitempty"`
+	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
 
 type Agent struct {

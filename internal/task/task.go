@@ -130,6 +130,9 @@ type TaskConfig struct {
 	BuiltinAgent BuiltinAgentType // 预定义 agent 类型
 	CacheSafe    *CacheSafeParams // 缓存安全参数
 	ForkDepth    int              // fork 深度
+
+	// OnComplete 任务完成后回调 (web 层用于保存 chat history)
+	OnComplete func(userID int64, sessionID int64, finalContent string)
 }
 
 // MessageEnvelope 跨 agent 消息信封

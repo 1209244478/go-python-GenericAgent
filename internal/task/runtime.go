@@ -20,6 +20,7 @@ type Task struct {
 	ctx          context.Context
 	mu           sync.RWMutex
 	subscribers  map[chan agent.DisplayItem]bool
+	displayHistory []agent.DisplayItem // 缓存历史输出，供迟到的订阅者重放
 	done         chan struct{}
 	planApproval chan bool // 计划审批信号
 
@@ -304,6 +305,11 @@ func (r *Runtime) runTask(t *Task, cfg TaskConfig) {
 
 	// 广播结束信号
 	r.broadcast(t, agent.DisplayItem{Done: true, Source: "task_end"})
+
+	// 任务完成后回调 (web 层保存 chat history)
+	if cfg.OnComplete != nil && finalContent != "" {
+		cfg.OnComplete(t.State.UserID, cfg.SessionID, finalContent)
+	}
 }
 
 // consumeInbox 消费 teammate 收到的消息
@@ -324,9 +330,15 @@ func (r *Runtime) consumeInbox(t *Task) {
 
 // broadcast 广播输出给所有订阅者
 func (r *Runtime) broadcast(t *Task, item agent.DisplayItem) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.mu.Lock()
+	t.displayHistory = append(t.displayHistory, item)
+	subs := make([]chan agent.DisplayItem, 0, len(t.subscribers))
 	for ch := range t.subscribers {
+		subs = append(subs, ch)
+	}
+	t.mu.Unlock()
+
+	for _, ch := range subs {
 		select {
 		case ch <- item:
 		default:
@@ -344,8 +356,16 @@ func (r *Runtime) Subscribe(taskID string) (<-chan agent.DisplayItem, func(), er
 		return nil, nil, fmt.Errorf("task not found: %s", taskID)
 	}
 
-	ch := make(chan agent.DisplayItem, 64)
+	ch := make(chan agent.DisplayItem, 256)
 	t.mu.Lock()
+	// 重放历史输出给迟到的订阅者（合并同类型 chunk 减少数量）
+	replay := mergeDisplayHistory(t.displayHistory)
+	for _, item := range replay {
+		select {
+		case ch <- item:
+		default:
+		}
+	}
 	t.subscribers[ch] = true
 	t.mu.Unlock()
 
@@ -370,6 +390,26 @@ func (r *Runtime) Abort(taskID string) error {
 	t.Cancel()
 	t.Agent.Abort()
 	return nil
+}
+
+// mergeDisplayHistory 合并同类型连续的 DisplayItem，减少重放数量
+func mergeDisplayHistory(items []agent.DisplayItem) []agent.DisplayItem {
+	if len(items) == 0 {
+		return items
+	}
+	result := make([]agent.DisplayItem, 0, len(items))
+	cur := items[0]
+	for i := 1; i < len(items); i++ {
+		it := items[i]
+		if it.Source == cur.Source && it.Turn == cur.Turn && !it.Done {
+			cur.Content += it.Content
+		} else {
+			result = append(result, cur)
+			cur = it
+		}
+	}
+	result = append(result, cur)
+	return result
 }
 
 // Resume 恢复暂停的任务(计划审批后)

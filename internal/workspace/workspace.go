@@ -24,14 +24,29 @@ type Manager struct {
 }
 
 func NewManager(dataDir string, skillDir string) *Manager {
+	// 确保路径是绝对路径，避免相对路径导致 CWD 和 chdir 问题
+	if absData, err := filepath.Abs(dataDir); err == nil {
+		dataDir = absData
+	}
+	if absSkill, err := filepath.Abs(skillDir); err == nil {
+		skillDir = absSkill
+	}
 	return &Manager{
 		dataDir:  dataDir,
 		skillDir: skillDir,
 	}
 }
 
-func (m *Manager) UserDir(userID int64) string {
+// UserBaseDir 返回用户基础目录（用于存储聊天历史等系统文件）
+func (m *Manager) UserBaseDir(userID int64) string {
 	dir := filepath.Join(m.dataDir, "users", fmt.Sprintf("u%d", userID))
+	os.MkdirAll(dir, 0755)
+	return dir
+}
+
+// UserDir 返回用户文件目录（用于存储用户文件）
+func (m *Manager) UserDir(userID int64) string {
+	dir := filepath.Join(m.dataDir, "users", fmt.Sprintf("u%d", userID), "files")
 	os.MkdirAll(dir, 0755)
 	return dir
 }

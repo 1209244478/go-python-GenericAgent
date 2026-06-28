@@ -167,7 +167,7 @@ async function sendMessage() {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
+    streamLoop: while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -224,7 +224,7 @@ async function sendMessage() {
           if (typingEl.parentNode) typingEl.remove();
           fullContent += d.content;
           bubble.innerHTML = renderMarkdown(fullContent);
-        } else if (d.done) {
+        } else if (d.done || d.source === 'task_end') {
           if (typingEl.parentNode) typingEl.remove();
           if (!fullContent && d.content) {
             fullContent = d.content;
@@ -232,6 +232,7 @@ async function sendMessage() {
           } else if (!fullContent) {
             bubble.innerHTML = renderMarkdown('Task completed.');
           }
+          break streamLoop;
         }
       }
     }
@@ -578,7 +579,7 @@ async function sendMessageText(text) {
     var decoder = new TextDecoder();
     var buffer = '';
 
-    while (true) {
+    streamLoop2: while (true) {
       var result = await reader.read();
       if (result.done) break;
 
@@ -628,7 +629,7 @@ async function sendMessageText(text) {
           if (typingEl.parentNode) typingEl.remove();
           fullContent += d.content;
           bubble.innerHTML = renderMarkdown(fullContent);
-        } else if (d.done) {
+        } else if (d.done || d.source === 'task_end') {
           if (typingEl.parentNode) typingEl.remove();
           if (!fullContent && d.content) {
             fullContent = d.content;
@@ -636,6 +637,7 @@ async function sendMessageText(text) {
           } else if (!fullContent) {
             bubble.innerHTML = renderMarkdown('Task completed.');
           }
+          break streamLoop2;
         }
       }
     }

@@ -142,10 +142,11 @@ func (h *Handler) SendCode(c *gin.Context) {
 
 func (h *Handler) Register(c *gin.Context) {
 	var req struct {
-		Email string `json:"email" binding:"required,email"`
-		Code  string `json:"code" binding:"required"`
-		Pwd   string `json:"password" binding:"required,min=6"`
-		Name  string `json:"name"`
+		Email    string `json:"email" binding:"required,email"`
+		Code     string `json:"code" binding:"required"`
+		Pwd      string `json:"password" binding:"required,min=6"`
+		Name     string `json:"name"`
+		UserType string `json:"user_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
@@ -174,7 +175,13 @@ func (h *Handler) Register(c *gin.Context) {
 		name = parts[0]
 	}
 
-	user, err := h.users.Create(req.Email, req.Pwd, name)
+	// 默认用户类型为普通用户
+	userType := req.UserType
+	if userType == "" {
+		userType = "user"
+	}
+
+	user, err := h.users.Create(req.Email, req.Pwd, name, userType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "registration failed"})
 		return
@@ -184,9 +191,10 @@ func (h *Handler) Register(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":    user.ID,
-			"email": user.Email,
-			"name":  user.Name,
+			"id":        user.ID,
+			"email":     user.Email,
+			"name":      user.Name,
+			"user_type": user.UserType,
 		},
 	})
 }
@@ -220,9 +228,10 @@ func (h *Handler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":    user.ID,
-			"email": user.Email,
-			"name":  user.Name,
+			"id":        user.ID,
+			"email":     user.Email,
+			"name":      user.Name,
+			"user_type": user.UserType,
 		},
 	})
 }
@@ -238,6 +247,7 @@ func (h *Handler) GetProfile(c *gin.Context) {
 		"id":         user.ID,
 		"email":      user.Email,
 		"name":       user.Name,
+		"user_type":  user.UserType,
 		"created_at": user.CreatedAt,
 	})
 }
@@ -1228,13 +1238,13 @@ type ChatMessage struct {
 }
 
 func (h *Handler) chatHistoryPath(userID int64) string {
-	userDir := h.wsMgr.UserDir(userID)
-	return filepath.Join(userDir, ".chat_history.json")
+	userBaseDir := h.wsMgr.UserBaseDir(userID)
+	return filepath.Join(userBaseDir, ".chat_history.json")
 }
 
 func (h *Handler) chatHistoryPathSession(userID int64, sessionID int64) string {
-	userDir := h.wsMgr.UserDir(userID)
-	return filepath.Join(userDir, fmt.Sprintf(".chat_history_%d.json", sessionID))
+	userBaseDir := h.wsMgr.UserBaseDir(userID)
+	return filepath.Join(userBaseDir, fmt.Sprintf(".chat_history_%d.json", sessionID))
 }
 
 func (h *Handler) loadChatHistory(userID int64) []ChatMessage {
@@ -1307,15 +1317,91 @@ func (h *Handler) saveChatMessageSession(userID int64, sessionID int64, role str
 func chatHistoryToMessages(history []ChatMessage) []llm.Message {
 	var messages []llm.Message
 	for _, m := range history {
+		role := m.Role
+		// "agent" 是内部存储用 role, LLM API 需要 "assistant"
+		if role == "agent" {
+			role = "assistant"
+		}
 		msg := llm.Message{
-			Role:       m.Role,
+			Role:       role,
 			Content:    m.Content,
 			ToolCalls:  m.ToolCalls,
 			ToolCallID: m.ToolCallID,
 		}
 		messages = append(messages, msg)
 	}
-	return messages
+	return sanitizeMessages(messages)
+}
+
+// sanitizeMessages 校验消息序列, 清理无效的 tool 消息和孤立的 tool_calls
+// LLM API 要求: assistant 带 tool_calls 后必须跟对应数量的 tool 消息
+func sanitizeMessages(msgs []llm.Message) []llm.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+
+	// 收集需要移除的索引
+	remove := make(map[int]bool)
+
+	// 1. 移除没有 tool_call_id 的 tool 消息 (孤立的 tool 消息)
+	// 2. 检查 assistant+tool_calls 后是否跟了正确的 tool 消息
+	i := 0
+	for i < len(msgs) {
+		msg := msgs[i]
+
+		if msg.Role == "tool" && msg.ToolCallID == "" {
+			// 没有 tool_call_id 的 tool 消息无效, 移除
+			remove[i] = true
+			i++
+			continue
+		}
+
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			// 检查后续消息是否是对应的 tool 消息
+			expectedIDs := make(map[string]bool)
+			for _, tc := range msg.ToolCalls {
+				if tc.ID != "" {
+					expectedIDs[tc.ID] = true
+				}
+			}
+
+			// 检查后续 tool 消息
+			j := i + 1
+			foundIDs := make(map[string]bool)
+			for j < len(msgs) && msgs[j].Role == "tool" {
+				if msgs[j].ToolCallID != "" {
+					foundIDs[msgs[j].ToolCallID] = true
+				}
+				j++
+			}
+
+			// 如果没有找到所有对应的 tool 消息, 清除 tool_calls
+			allFound := true
+			for id := range expectedIDs {
+				if !foundIDs[id] {
+					allFound = false
+					break
+				}
+			}
+			if !allFound {
+				msgs[i].ToolCalls = nil
+			}
+		}
+
+		i++
+	}
+
+	// 移除标记的消息
+	if len(remove) == 0 {
+		return msgs
+	}
+	var result []llm.Message
+	for i, msg := range msgs {
+		if !remove[i] {
+			result = append(result, msg)
+		}
+	}
+	return result
 }
 
 func (h *Handler) GetChatHistory(c *gin.Context) {
@@ -1444,6 +1530,13 @@ func (h *Handler) StartTask(c *gin.Context) {
 		history = chatHistoryToMessages(h.loadChatHistory(userID))
 	}
 
+	// 保存 user 消息到 chat history (立即保存, 不等任务完成)
+	if req.SessionID > 0 {
+		h.saveChatMessageSession(userID, req.SessionID, "user", req.Prompt, nil, "")
+	} else {
+		h.saveChatMessage(userID, "user", req.Prompt, nil, "")
+	}
+
 	t, err := h.taskRT.Start(task.TaskConfig{
 		Type:      task.TypeMain,
 		UserID:    userID,
@@ -1452,6 +1545,16 @@ func (h *Handler) StartTask(c *gin.Context) {
 		Goal:      req.Goal,
 		PlanMode:  req.PlanMode,
 		History:   history,
+		OnComplete: func(uid int64, sid int64, finalContent string) {
+			if finalContent == "" {
+				return
+			}
+			if sid > 0 {
+				h.saveChatMessageSession(uid, sid, "agent", finalContent, nil, "")
+			} else {
+				h.saveChatMessage(uid, "agent", finalContent, nil, "")
+			}
+		},
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
