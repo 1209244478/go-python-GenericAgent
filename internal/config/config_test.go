@@ -10,8 +10,7 @@ import (
 func TestReloadIfChanged_ConcurrentNoPanic(t *testing.T) {
 	// 创建一个空 Config，path 为空时 ReloadIfChanged 不会真正加载
 	cfg := &Config{
-		LLMs:   make(map[string]LLMConfig),
-		Mixins: make(map[string]MixinConfig),
+		LLMs: make(map[string]LLMConfig),
 	}
 	globalCfg = cfg
 

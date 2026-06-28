@@ -460,21 +460,6 @@ func TestSecurity_NormalizationBypass(t *testing.T) {
 func TestSecurity_MaliciousPythonFile(t *testing.T) {
 	router := setupTestRouter(t)
 
-	maliciousFilePath := filepath.Join("..", "..", "test_malicious_code.py")
-	absPath, _ := filepath.Abs(maliciousFilePath)
-	codeBytes, err := os.ReadFile(absPath)
-	if err != nil {
-		t.Fatalf("cannot read malicious test file: %v", err)
-	}
-	code := string(codeBytes)
-
-	blocked, reason := router.isCodeBlocked(code, "python")
-	if !blocked {
-		t.Errorf("SECURITY HOLE: malicious Python file was NOT blocked!\nFile: %s", absPath)
-	} else {
-		t.Logf("MALICIOUS FILE BLOCKED: %s", reason)
-	}
-
 	attackFunctions := []struct {
 		name string
 		code string

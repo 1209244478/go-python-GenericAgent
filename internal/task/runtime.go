@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -24,22 +23,16 @@ type Task struct {
 	done         chan struct{}
 	planApproval chan bool // 计划审批信号
 
-	// teammate 通信
-	inbox   chan MessageEnvelope // 接收其他 agent 的消息
-	cleanup func()                // worktree 清理函数
-
 	// 超时控制
 	timeoutTimer *time.Timer
 }
 
 // Runtime 任务运行时，管理所有活跃任务
 type Runtime struct {
-	store         *Store
-	mu            sync.RWMutex
-	tasks         map[string]*Task
-	agentFactory  AgentFactory
-	worktreeMgr   *WorktreeManager
-	messageRouter *MessageRouter // 跨 agent 消息路由
+	store        *Store
+	mu           sync.RWMutex
+	tasks        map[string]*Task
+	agentFactory AgentFactory
 }
 
 // AgentFactory 创建 agent 的工厂函数(避免循环依赖)
@@ -57,14 +50,11 @@ type AgentConfig struct {
 
 // NewRuntime 创建运行时
 func NewRuntime(store *Store, factory AgentFactory) *Runtime {
-	r := &Runtime{
+	return &Runtime{
 		store:        store,
 		tasks:        make(map[string]*Task),
 		agentFactory: factory,
 	}
-	r.worktreeMgr = NewWorktreeManager("")
-	r.messageRouter = NewMessageRouter()
-	return r
 }
 
 // Start 启动新任务
@@ -92,25 +82,6 @@ func (r *Runtime) Start(cfg TaskConfig) (*Task, error) {
 		TeamName:    cfg.TeamName,
 	}
 
-	// worktree 隔离处理
-	var cleanup func()
-	if cfg.Isolation == IsolationWorktree {
-		repoRoot := FindRepoRoot(cfg.CwdOverride)
-		if repoRoot == "" {
-			repoRoot, _ = os.Getwd()
-		}
-		wtPath, cln, err := r.worktreeMgr.CreateWorktree(repoRoot, taskID)
-		if err != nil {
-			// worktree 创建失败, 降级为无隔离
-			state.Isolation = IsolationNone
-		} else {
-			state.WorktreePath = wtPath
-			state.CwdOverride = wtPath
-			cfg.CwdOverride = wtPath
-			cleanup = cln
-		}
-	}
-
 	// 创建 agent
 	a := r.agentFactory(AgentConfig{
 		UserID:      cfg.UserID,
@@ -121,12 +92,6 @@ func (r *Runtime) Start(cfg TaskConfig) (*Task, error) {
 		CwdOverride: cfg.CwdOverride,
 	})
 
-	// F4: 设置上下文元数据持久化路径 (compactionHistory + calibration 落盘)
-	if a.ContextMgr != nil {
-		metaPath := filepath.Join(r.store.taskDir(cfg.UserID, taskID), "context_meta.json")
-		a.ContextMgr.SetMetaPath(metaPath)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &Task{
 		State:        state,
@@ -136,8 +101,6 @@ func (r *Runtime) Start(cfg TaskConfig) (*Task, error) {
 		subscribers:  make(map[chan agent.DisplayItem]bool),
 		done:         make(chan struct{}),
 		planApproval: make(chan bool, 1),
-		inbox:        make(chan MessageEnvelope, 16),
-		cleanup:      cleanup,
 	}
 
 	// 任务级超时
@@ -157,11 +120,6 @@ func (r *Runtime) Start(cfg TaskConfig) (*Task, error) {
 	r.tasks[taskID] = t
 	r.mu.Unlock()
 
-	// 注册到消息路由 (teammate 可寻址)
-	if cfg.AgentName != "" {
-		r.messageRouter.Register(cfg.AgentName, t)
-	}
-
 	// 持久化初始状态
 	r.store.Save(state)
 
@@ -175,29 +133,11 @@ func (r *Runtime) Start(cfg TaskConfig) (*Task, error) {
 func (r *Runtime) runTask(t *Task, cfg TaskConfig) {
 	defer close(t.done)
 	defer func() {
-		// 清理 worktree
-		if t.cleanup != nil {
-			// 检查是否有变更, 记录到日志
-			if hasChanges, err := r.worktreeMgr.HasWorktreeChanges(t.State.ID); err == nil && hasChanges {
-				r.store.AppendOutput(t.State.UserID, t.State.ID,
-					fmt.Sprintf("\n[worktree %s 有未提交变更, 路径: %s]\n", t.State.ID, t.State.WorktreePath))
-			}
-			t.cleanup()
-		}
-		// 注销消息路由
-		if t.State.AgentName != "" {
-			r.messageRouter.Unregister(t.State.AgentName)
-		}
 		// 停止超时计时器
 		if t.timeoutTimer != nil {
 			t.timeoutTimer.Stop()
 		}
 	}()
-
-	// 启动 inbox 消费 goroutine (teammate 模式)
-	if cfg.Type == TypeTeammate {
-		go r.consumeInbox(t)
-	}
 
 	// 启动 agent
 	ch := t.Agent.Run(cfg.Prompt, "task", cfg.History)
@@ -309,22 +249,6 @@ func (r *Runtime) runTask(t *Task, cfg TaskConfig) {
 	// 任务完成后回调 (web 层保存 chat history)
 	if cfg.OnComplete != nil && finalContent != "" {
 		cfg.OnComplete(t.State.UserID, cfg.SessionID, finalContent)
-	}
-}
-
-// consumeInbox 消费 teammate 收到的消息
-func (r *Runtime) consumeInbox(t *Task) {
-	for {
-		select {
-		case <-t.done:
-			return
-		case msg, ok := <-t.inbox:
-			if !ok {
-				return
-			}
-			// 将消息注入 agent 上下文
-			t.Agent.InjectMessage(fmt.Sprintf("[消息来自 %s]: %s", msg.From, msg.Content))
-		}
 	}
 }
 
@@ -449,15 +373,9 @@ func (r *Runtime) SaveState(state *TaskState) error {
 	return r.store.Save(state)
 }
 
-// SendMessage 跨 agent 发送消息
-// 参考 cc-haha SendMessage 工具
+// SendMessage 跨 agent 发送消息 (当前版本不支持多 agent, 返回错误)
 func (r *Runtime) SendMessage(from, to, content string) error {
-	return r.messageRouter.Send(MessageEnvelope{
-		From:    from,
-		To:      to,
-		Content: content,
-		SentAt:  time.Now(),
-	})
+	return fmt.Errorf("cross-agent messaging not supported in single-agent mode")
 }
 
 // Wait 等待任务完成
@@ -488,17 +406,6 @@ func (r *Runtime) Restore() error {
 				now := time.Now()
 				state.EndTime = &now
 				r.store.Save(state)
-
-				// 清理残留 worktree
-				if state.WorktreePath != "" {
-					repoRoot := FindRepoRoot(state.WorktreePath)
-					if repoRoot != "" {
-						r.worktreeMgr.RemoveWorktree(repoRoot, state.ID)
-					} else {
-						// 兜底: 直接删除目录
-						os.RemoveAll(state.WorktreePath)
-					}
-				}
 			}
 		}
 	}
@@ -614,6 +521,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
-
-// _ filepath 引用, 避免删除 import 后报错
-var _ = filepath.Join

@@ -28,14 +28,8 @@ type LLMConfig struct {
 	ExtraSysPrompt string `json:"extra_sys_prompt"`
 }
 
-type MixinConfig struct {
-	Strategy string `json:"strategy"`
-	Models   []int  `json:"models"`
-}
-
 type Config struct {
-	LLMs   map[string]LLMConfig  `json:"-"`
-	Mixins map[string]MixinConfig `json:"-"`
+	LLMs map[string]LLMConfig `json:"-"`
 
 	mu     sync.RWMutex
 	path   string
@@ -62,7 +56,6 @@ func Load() (*Config, error) {
 	env := dotenv.FindAndLoad(root)
 	if llmCfg := llmFromEnv(env); llmCfg != nil {
 		cfg.LLMs = map[string]LLMConfig{"default": *llmCfg}
-		cfg.Mixins = make(map[string]MixinConfig)
 		globalCfg = cfg
 		return cfg, nil
 	}
@@ -85,7 +78,6 @@ func Load() (*Config, error) {
 	}
 
 	cfg.LLMs = make(map[string]LLMConfig)
-	cfg.Mixins = make(map[string]MixinConfig)
 
 	for key, val := range raw {
 		if containsAny(key, "api", "config") {
@@ -110,12 +102,6 @@ func Load() (*Config, error) {
 					lc.MaxRetries = 3
 				}
 				cfg.LLMs[key] = lc
-			}
-		}
-		if containsAny(key, "mixin") {
-			var mc MixinConfig
-			if err := json.Unmarshal(val, &mc); err == nil {
-				cfg.Mixins[key] = mc
 			}
 		}
 	}
@@ -207,7 +193,6 @@ func (c *Config) ReloadIfChanged() bool {
 			// 加锁保护 globalCfg 的并发更新
 			globalCfg.mu.Lock()
 			globalCfg.LLMs = newCfg.LLMs
-			globalCfg.Mixins = newCfg.Mixins
 			globalCfg.path = newCfg.path
 			globalCfg.mtime = newCfg.mtime
 			globalCfg.mu.Unlock()

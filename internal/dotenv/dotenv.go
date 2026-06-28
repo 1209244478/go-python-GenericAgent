@@ -33,17 +33,9 @@ func Load(path string) map[string]string {
 }
 
 func FindAndLoad(rootDir string) map[string]string {
-	candidates := []string{
-		".env",
-	}
-	for _, c := range candidates {
-		p := c
-		if !strings.HasPrefix(p, "/") {
-			p = rootDir + "/" + c
-		}
-		if env := Load(p); len(env) > 0 {
-			return env
-		}
+	p := rootDir + "/.env"
+	if env := Load(p); len(env) > 0 {
+		return env
 	}
 	return make(map[string]string)
 }

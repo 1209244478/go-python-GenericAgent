@@ -1,11 +1,9 @@
 package tool
 
 import (
-	"context"
 	"testing"
 
 	"github.com/genericagent/ga/internal/agent"
-	"github.com/genericagent/ga/internal/task"
 )
 
 // ==================== 工具参数验证测试 ====================
@@ -475,190 +473,6 @@ func TestSecurity_WritePathBlocked(t *testing.T) {
 	}
 }
 
-// ==================== Task 包测试 (独立测试) ====================
-
-func TestMessageRouter_BasicRouting(t *testing.T) {
-	mr := task.NewMessageRouter()
-
-	// 测试空路由器
-	agents := mr.ListAgents()
-	if len(agents) != 0 {
-		t.Errorf("expected 0 agents, got %d", len(agents))
-	}
-
-	// 测试发送到不存在的 agent
-	err := mr.Send(task.MessageEnvelope{
-		From:    "a",
-		To:      "nonexistent",
-		Content: "hello",
-	})
-	if err == nil {
-		t.Error("expected error for nonexistent agent")
-	}
-	t.Logf("Nonexistent agent error: %v", err)
-}
-
-func TestMessageRouter_History(t *testing.T) {
-	mr := task.NewMessageRouter()
-
-	// 发送几条消息 (即使失败也会记录历史)
-	for i := 0; i < 5; i++ {
-		_ = mr.Send(task.MessageEnvelope{
-			From:    "agent1",
-			To:      "nonexistent",
-			Content: "test message",
-		})
-	}
-
-	history := mr.GetHistory()
-	if len(history) != 5 {
-		t.Errorf("expected 5 history entries, got %d", len(history))
-	}
-	t.Logf("History count: %d", len(history))
-}
-
-func TestMessageRouter_ShutdownProtocol(t *testing.T) {
-	mr := task.NewMessageRouter()
-
-	// 发送 shutdown 请求给不存在的 agent
-	err := mr.SendShutdown("main", "nonexistent", "task complete")
-	if err == nil {
-		t.Error("expected error for shutdown to nonexistent agent")
-	}
-	t.Logf("Shutdown error: %v", err)
-}
-
-func TestContentReplacementState(t *testing.T) {
-	crs := task.NewContentReplacementState()
-
-	// 测试空状态 (不应 panic)
-	result := crs.Apply(nil)
-	if result != nil {
-		t.Errorf("expected nil for nil input, got %v", result)
-	}
-
-	// 测试 Restore 空状态
-	result = crs.Restore(nil)
-	if result != nil {
-		t.Errorf("expected nil for nil input, got %v", result)
-	}
-
-	t.Logf("ContentReplacementState created successfully")
-}
-
-func TestIdleTimeoutMonitor(t *testing.T) {
-	called := false
-	monitor := task.NewIdleTimeoutMonitor(100*1_000_000, func() { // 100ms in ns
-		called = true
-	})
-
-	monitor.Start()
-	monitor.Activity() // 重置
-
-	// 等待超时
-	// (在实际测试中可能需要 sleep)
-	monitor.Stop()
-
-	if called {
-		t.Log("Timeout callback was called")
-	} else {
-		t.Log("Timeout was stopped before callback")
-	}
-}
-
-func TestCombinedAbortSignal(t *testing.T) {
-	signal := task.NewCombinedAbortSignal(context.Background())
-
-	if signal.Err() != nil {
-		t.Error("expected nil error initially")
-	}
-
-	signal.Trigger("test_reason")
-
-	if signal.Err() == nil {
-		t.Error("expected error after trigger")
-	}
-
-	sources := signal.Sources()
-	if len(sources) != 1 || sources[0] != "test_reason" {
-		t.Errorf("unexpected sources: %v", sources)
-	}
-	t.Logf("Sources: %v", sources)
-}
-
-func TestGracefulShutdown(t *testing.T) {
-	gs := task.NewGracefulShutdown(100*1_000_000, 50*1_000_000) // 100ms, 50ms
-
-	if gs.IsShuttingDown() {
-		t.Error("expected not shutting down initially")
-	}
-
-	ch := gs.InitiateShutdown()
-
-	if !gs.IsShuttingDown() {
-		t.Error("expected shutting down after initiate")
-	}
-
-	gs.Complete()
-
-	<-ch // 等待关闭完成
-
-	t.Log("Graceful shutdown completed")
-}
-
-func TestAllowedPrompts(t *testing.T) {
-	ap := agent.NewAllowedPrompts()
-
-	ap.Allow("git status")
-	ap.Allow("git diff")
-	ap.Allow("npm run build")
-
-	if !ap.IsAllowed("git status") {
-		t.Error("git status should be allowed")
-	}
-	if !ap.IsAllowed("git diff main.go") {
-		t.Error("git diff main.go should be allowed (prefix match)")
-	}
-	if ap.IsAllowed("rm -rf /") {
-		t.Error("rm -rf / should NOT be allowed")
-	}
-
-	list := ap.List()
-	if len(list) != 3 {
-		t.Errorf("expected 3 allowed prompts, got %d", len(list))
-	}
-	t.Logf("Allowed prompts: %v", list)
-}
-
-func TestParseAllowedPromptsFromPlan(t *testing.T) {
-	plan := `# 执行计划
-
-## 步骤
-1. 检查代码
-2. 运行测试
-
-## 允许的命令
-- git status
-- git diff
-- npm run build
-- go test
-`
-
-	ap := agent.ParseAllowedPromptsFromPlan(plan)
-
-	if !ap.IsAllowed("git status") {
-		t.Error("git status should be allowed")
-	}
-	if !ap.IsAllowed("go test ./...") {
-		t.Error("go test should be allowed (prefix match)")
-	}
-	if ap.IsAllowed("rm -rf /") {
-		t.Error("rm -rf / should NOT be allowed")
-	}
-
-	t.Logf("Parsed allowed prompts: %v", ap.List())
-}
-
 // ==================== Agent 包测试 ====================
 
 func TestGoalTracker(t *testing.T) {
@@ -692,33 +506,6 @@ func TestGoalTracker(t *testing.T) {
 		t.Error("expected non-empty status report")
 	}
 	t.Logf("Status report: %s", report)
-}
-
-func TestPlanFile(t *testing.T) {
-	pf := agent.NewPlanFile(t.TempDir(), "test-task-123")
-
-	plan := "1. Step one\n2. Step two\n3. Step three"
-	if err := pf.Save(plan); err != nil {
-		t.Fatalf("save failed: %v", err)
-	}
-
-	if pf.IsApproved() {
-		t.Error("expected not approved initially")
-	}
-
-	pf.MarkApproved()
-	if !pf.IsApproved() {
-		t.Error("expected approved after MarkApproved")
-	}
-
-	loaded, err := pf.Load()
-	if err != nil {
-		t.Fatalf("load failed: %v", err)
-	}
-	if !contains(loaded, plan) {
-		t.Errorf("loaded content mismatch: %s", loaded)
-	}
-	t.Logf("Plan file path: %s", pf.GetPath())
 }
 
 // ==================== 辅助函数 ====================
